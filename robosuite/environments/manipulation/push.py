@@ -60,11 +60,6 @@ class Push(SingleArmEnv):
         use_object_obs (bool): if True, include object (cube) information in
             the observation.
 
-        reward_scale (None or float): Scales the normalized reward function by the amount specified.
-            If None, environment reward remains unnormalized
-
-        reward_shaping (bool): if True, use dense rewards.
-
         has_renderer (bool): If true, render the simulation state in
             a viewer instead of headless mode.
 
@@ -125,13 +120,11 @@ class Push(SingleArmEnv):
         env_configuration="default",
         controller_configs=None,
         gripper_types="PushingGripper",
-        initialization_noise="default",
+        initialization_noise=None,
         table_full_size=(0.8, 0.8, 0.05),
         table_friction=(1., 5e-3, 1e-4),
         use_camera_obs=True,
         use_object_obs=True,
-        reward_scale=1.0,
-        reward_shaping=False,
         has_renderer=False,
         has_offscreen_renderer=True,
         render_camera="frontview",
@@ -152,10 +145,6 @@ class Push(SingleArmEnv):
         self.table_full_size = table_full_size
         self.table_friction = table_friction
         self.table_offset = np.array((0, 0, 0.8))
-
-        # reward configuration
-        self.reward_scale = reward_scale
-        self.reward_shaping = reward_shaping
 
         # whether to use ground-truth object states
         self.use_object_obs = use_object_obs
@@ -192,50 +181,17 @@ class Push(SingleArmEnv):
         """
         Reward function for the task.
 
-        Sparse un-normalized reward:
-
-            - a discrete reward of 3.0 is provided if the cube reaches the goal
-
-        Un-normalized summed components if using reward shaping:
-
-            - Reaching: in [0, 1], to encourage the arm to reach the cube
-            - Pushing: in [0, 1], to encourage the arm to push the cube towards the goal
-            - Lifting: in {0, 1}, non-zero if the cube has reached the goal
-
-        Note that the final reward is normalized and scaled by
-        reward_scale / 3.0 as well so that the max score is equal to reward_scale
-
         Args:
             action (np array): [NOT USED]
 
         Returns:
             float: reward value
         """
-        reward = 0
+        reward = -1
 
         # sparse completion reward
         if self._check_success():
-            reward = 3
-
-        # use a shaping reward
-        elif self.reward_shaping:
-
-            # reaching reward
-            cube_pos = self.sim.data.body_xpos[self.cube_body_id]
-            gripper_site_pos = self.sim.data.site_xpos[self.robots[0].eef_site_id]
-            dist = np.linalg.norm(gripper_site_pos - cube_pos) + self.CUBE_HALFSIZE * 2
-            reaching_reward = min(1, 1 - np.tanh(10.0 * dist))
-            reward += reaching_reward
-
-            # pushing reward
-            goal_pos = self.sim.data.body_xpos[self.goal_body_id][:2]
-            dist = np.linalg.norm(cube_pos[:2] - goal_pos)
-            pushing_reward = 1 - np.tanh(10.0 * dist)
-            reward += pushing_reward
-
-        # Scale reward if requested
-        if self.reward_scale is not None:
-            reward *= self.reward_scale / 3
+            reward = 0
 
         return reward
 
@@ -248,6 +204,29 @@ class Push(SingleArmEnv):
         # Adjust base pose accordingly
         xpos = self.robots[0].robot_model.base_xpos_offset["table"](self.table_full_size[0])
         self.robots[0].robot_model.set_base_xpos(xpos)
+
+        # right side of table ([0, 0.2])
+        # self.robots[0].init_qpos = np.array([
+        #     0.2602561,
+        #     1.09212466,
+        #     0.03546359,
+        #     -1.78849099,
+        #     -0.2233546,
+        #     2.93094696,
+        #     1.27766025
+        # ])
+
+        # middle of table ([0, 0])
+        self.robots[0].init_qpos = np.array([
+            0,
+            1.0431,
+            0,
+            -1.9429,
+            0,
+            3.0427,
+            0.78539816,
+        ])
+
 
         # load model for table top workspace
         mujoco_arena = TableArena(
@@ -289,7 +268,7 @@ class Push(SingleArmEnv):
         )
         self.goal = BoxObject(
             name="goal",
-            size=[self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, 0.001],
+            size=[self.CUBE_HALFSIZE * 2, self.CUBE_HALFSIZE * 2, 0.001],
             material=greenwood,
             obj_type="visual",
             joints=None,
@@ -319,11 +298,12 @@ class Push(SingleArmEnv):
             self.goal_initializer = UniformRandomSampler(
                 name="GoalSampler",
                 mujoco_objects=self.goal,
-                x_range=[0, 0],
+                x_range=[-0.2, 0.2],
                 y_range=[-0.2, 0.2],
                 rotation=0,
-                ensure_object_boundary_in_range=False,
+                ensure_object_boundary_in_range=True,
                 ensure_valid_placement=True,
+                reference_pos=self.table_offset,
                 z_offset=0.001,
             )
 
@@ -345,6 +325,7 @@ class Push(SingleArmEnv):
         # Additional object references from this env
         self.cube_body_id = self.sim.model.body_name2id(self.cube.root_body)
         self.goal_body_id = self.sim.model.body_name2id(self.goal.root_body)
+        self.gripper_body_id = self.sim.model.body_name2id(f"{self.robots[0].gripper.naming_prefix}pushing_gripper")
 
     def _setup_observables(self):
         """
@@ -366,9 +347,9 @@ class Push(SingleArmEnv):
             def cube_pos(obs_cache):
                 return np.array(self.sim.data.body_xpos[self.cube_body_id])
 
-            @sensor(modality=modality)
-            def cube_quat(obs_cache):
-                return convert_quat(np.array(self.sim.data.body_xquat[self.cube_body_id]), to="xyzw")
+            # @sensor(modality=modality)
+            # def cube_quat(obs_cache):
+            #     return convert_quat(np.array(self.sim.data.body_xquat[self.cube_body_id]), to="xyzw")
 
             @sensor(modality=modality)
             def gripper_to_cube_pos(obs_cache):
@@ -390,7 +371,7 @@ class Push(SingleArmEnv):
                 return obs_cache["cube_pos"] - obs_cache["goal_pos"] if \
                     "cube_pos" in obs_cache and "goal_pos" in obs_cache else np.zeros(3)
 
-            sensors = [cube_pos, cube_quat, gripper_to_cube_pos, goal_pos, gripper_to_goal_pos, cube_to_goal_pos]
+            sensors = [cube_pos, gripper_to_cube_pos, goal_pos, gripper_to_goal_pos, cube_to_goal_pos]
             names = [s.__name__ for s in sensors]
 
             # Create observables
@@ -411,22 +392,21 @@ class Push(SingleArmEnv):
 
         # Reset all object positions using initializer sampler if we're not directly loading from an xml
         if not self.deterministic_reset:
-
             # Sample from the placement initializer for all objects
-            cube_placement = self.cube_initializer.sample()
+            gripper_pos = self.sim.data.body_xpos[self.gripper_body_id]
+            cube_pos = gripper_pos
+            while np.max(np.abs(cube_pos[:2] - gripper_pos[:2])) <= self.CUBE_HALFSIZE + 0.013:
+                cube_placement = self.cube_initializer.sample()
+                cube_pos, cube_quat, _ = cube_placement["cube"]
 
-            cube_pos, cube_quat, _ = cube_placement["cube"]
             self.sim.data.set_joint_qpos(self.cube.joints[0], np.concatenate([np.array(cube_pos), np.array(cube_quat)]))
 
-            goal_placement = self.goal_initializer.sample(
-                fixtures=cube_placement,
-                reference=(cube_pos[0], self.table_offset[1], self.table_offset[2])
-            )
+            goal_placement = self.goal_initializer.sample(fixtures=cube_placement)
             goal_pos, goal_quat, _ = goal_placement["goal"]
             self.sim.model.body_pos[self.goal_body_id] = np.array([goal_pos])
             self.sim.model.body_quat[self.goal_body_id] = np.array([goal_quat])
 
-    def _check_success(self):
+    def check_success(self, goal_pos, cube_pos):
         """
         Check if cube has reached goal.
 
@@ -434,44 +414,51 @@ class Push(SingleArmEnv):
             bool: True if cube has reached goal.
         """
         # compute 2D bounding box of goal square
-        goal_pos = np.array(self.sim.data.body_xpos[self.goal_body_id])[:2]
-        goal_max = goal_pos + np.array([self.CUBE_HALFSIZE, self.CUBE_HALFSIZE])
-        goal_min = goal_pos - np.array([self.CUBE_HALFSIZE, self.CUBE_HALFSIZE])
+        # goal_pos = np.array(self.sim.data.body_xpos[self.goal_body_id])[:2]
+        # goal_max = goal_pos + np.array([self.CUBE_HALFSIZE, self.CUBE_HALFSIZE])
+        # goal_min = goal_pos - np.array([self.CUBE_HALFSIZE, self.CUBE_HALFSIZE])
+        #
+        # # compute the world coordinates of all 8 corners of the cube
+        # cube_pos = np.array(self.sim.data.body_xpos[self.cube_body_id])
+        # cube_mat = np.array(self.sim.data.body_xmat[self.cube_body_id]).reshape(3, 3)
+        # corners = np.array([
+        #     [self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
+        #     [self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
+        #     [self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
+        #     [self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
+        #     [-self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
+        #     [-self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
+        #     [-self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
+        #     [-self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
+        # ])
+        # corners_world = (cube_mat @ corners.T).T + cube_pos
+        # # project corners onto table
+        # corners_2d = corners_world[:, :2]
+        #
+        # # return True if at least one corner is within the goal square
+        # return np.logical_and(corners_2d <= goal_max, corners_2d >= goal_min).all(axis=1).any()
+        return np.max(np.abs(goal_pos[:2] - cube_pos[:2])) <= self.CUBE_HALFSIZE * 2
 
-        # compute the world coordinates of all 8 corners of the cube
-        cube_pos = np.array(self.sim.data.body_xpos[self.cube_body_id])
-        cube_mat = np.array(self.sim.data.body_xmat[self.cube_body_id]).reshape(3, 3)
-        corners = np.array([
-            [self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
-            [self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
-            [self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
-            [self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
-            [-self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
-            [-self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
-            [-self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
-            [-self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
-        ])
-        corners_world = (cube_mat @ corners.T).T + cube_pos
-        # project corners onto table
-        corners_2d = corners_world[:, :2]
+    def _check_success(self):
+        return self.check_success(
+            np.array(self.sim.data.body_xpos[self.goal_body_id]),
+            np.array(self.sim.data.body_xpos[self.cube_body_id])
+        )
 
-        # return True if at least one corner is within the goal square
-        return np.logical_and(corners_2d <= goal_max, corners_2d >= goal_min).all(axis=1).any()
+    def _post_action(self, action):
+        """
+        In addition to super method, terminate early if task is completed
 
-    # def _post_action(self, action):
-    #     """
-    #     In addition to super method, terminate early if task is completed
-    #
-    #     Args:
-    #         action (np.array): Action to execute within the environment
-    #
-    #     Returns:
-    #         3-tuple:
-    #
-    #             - (float) reward from the environment
-    #             - (bool) whether the current episode is completed or not
-    #             - (dict) info about current env step
-    #     """
-    #     reward, done, info = super()._post_action(action)
-    #     done = done or self._check_success()
-    #     return reward, done, info
+        Args:
+            action (np.array): Action to execute within the environment
+
+        Returns:
+            3-tuple:
+
+                - (float) reward from the environment
+                - (bool) whether the current episode is completed or not
+                - (dict) info about current env step
+        """
+        reward, done, info = super()._post_action(action)
+        done = done or self._check_success()
+        return reward, done, info
