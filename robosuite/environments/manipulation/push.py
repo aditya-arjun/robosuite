@@ -112,7 +112,10 @@ class Push(SingleArmEnv):
         AssertionError: [Invalid number of robots specified]
     """
 
-    CUBE_HALFSIZE = 0.022
+    CUBE_HALFSIZE = 0.022  # half of side length of block
+    GOAL_HALFSIZE = 0.022  # half of side length of goal square
+    SPAWN_AREA_SIZE = 0.2  # side length of square where block and goal can spawn
+    GRIPPER_BOUNDS_SIZE = np.array([0.3, 0.3, 0.15])  # x, y, z bounds of gripper position
 
     def __init__(
         self,
@@ -268,7 +271,7 @@ class Push(SingleArmEnv):
         )
         self.goal = BoxObject(
             name="goal",
-            size=[self.CUBE_HALFSIZE * 2, self.CUBE_HALFSIZE * 2, 0.001],
+            size=[self.GOAL_HALFSIZE, self.GOAL_HALFSIZE, 0.001],
             material=greenwood,
             obj_type="visual",
             joints=None,
@@ -282,8 +285,8 @@ class Push(SingleArmEnv):
             self.cube_initializer = UniformRandomSampler(
                 name="CubeSampler",
                 mujoco_objects=self.cube,
-                x_range=[-0.2, 0.2],
-                y_range=[-0.2, 0.2],
+                x_range=[-self.SPAWN_AREA_SIZE, self.SPAWN_AREA_SIZE],
+                y_range=[-self.SPAWN_AREA_SIZE, self.SPAWN_AREA_SIZE],
                 rotation=0,
                 ensure_object_boundary_in_range=True,
                 ensure_valid_placement=True,
@@ -298,8 +301,8 @@ class Push(SingleArmEnv):
             self.goal_initializer = UniformRandomSampler(
                 name="GoalSampler",
                 mujoco_objects=self.goal,
-                x_range=[-0.2, 0.2],
-                y_range=[-0.2, 0.2],
+                x_range=[-self.SPAWN_AREA_SIZE, self.SPAWN_AREA_SIZE],
+                y_range=[-self.SPAWN_AREA_SIZE, self.SPAWN_AREA_SIZE],
                 rotation=0,
                 ensure_object_boundary_in_range=True,
                 ensure_valid_placement=True,
@@ -437,7 +440,7 @@ class Push(SingleArmEnv):
         #
         # # return True if at least one corner is within the goal square
         # return np.logical_and(corners_2d <= goal_max, corners_2d >= goal_min).all(axis=1).any()
-        return np.max(np.abs(goal_pos[:2] - cube_pos[:2])) <= self.CUBE_HALFSIZE * 2
+        return np.max(np.abs(goal_pos[:2] - cube_pos[:2])) <= self.GOAL_HALFSIZE
 
     def _check_success(self):
         return self.check_success(
@@ -462,3 +465,11 @@ class Push(SingleArmEnv):
         reward, done, info = super()._post_action(action)
         done = done or self._check_success()
         return reward, done, info
+
+    def _pre_action(self, action, policy_step=False):
+        """Does bounds checking to prevent the gripper from leaving a certain area"""
+        gripper_pos = self.sim.data.body_xpos[self.gripper_body_id] - self.table_offset
+        mask = ((gripper_pos <= self.GRIPPER_BOUNDS_SIZE) | (action[:3] < 0))\
+            & ((gripper_pos >= -self.GRIPPER_BOUNDS_SIZE) | (action[:3] > 0))
+        action[:3] = np.where(mask, action[:3], 0)
+        super()._pre_action(action, policy_step)
