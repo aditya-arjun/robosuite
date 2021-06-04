@@ -114,8 +114,8 @@ class Push(SingleArmEnv):
 
     CUBE_HALFSIZE = 0.022  # half of side length of block
     GOAL_HALFSIZE = 0.022  # half of side length of goal square
-    SPAWN_AREA_SIZE = 0.2  # side length of square where block and goal can spawn
-    GRIPPER_BOUNDS_SIZE = np.array([0.3, 0.3, 0.15])  # x, y, z bounds of gripper position
+    SPAWN_AREA_SIZE = 0.15  # side length of square where block and goal can spawn
+    GRIPPER_BOUNDS_SIZE = np.array([0.2, 0.2, 0.15])  # x, y, z bounds of gripper position
 
     def __init__(
         self,
@@ -147,7 +147,7 @@ class Push(SingleArmEnv):
         # settings for table top
         self.table_full_size = table_full_size
         self.table_friction = table_friction
-        self.table_offset = np.array((0, 0, 0.8))
+        self.table_offset = np.array((-0.1, 0, 0.8))
 
         # whether to use ground-truth object states
         self.use_object_obs = use_object_obs
@@ -220,16 +220,26 @@ class Push(SingleArmEnv):
         # ])
 
         # middle of table ([0, 0])
+        # self.robots[0].init_qpos = np.array([
+        #     0,
+        #     1.0431,
+        #     0,
+        #     -1.9429,
+        #     0,
+        #     3.0427,
+        #     0.78539816,
+        # ])
+
+        # middle of table (offset) ([-0.1, 0])
         self.robots[0].init_qpos = np.array([
             0,
-            1.0431,
+            0.96629869,
             0,
-            -1.9429,
+            -2.23725147,
             0,
-            3.0427,
-            0.78539816,
+            3.26003255,
+            0.78539816
         ])
-
 
         # load model for table top workspace
         mujoco_arena = TableArena(
@@ -393,6 +403,11 @@ class Push(SingleArmEnv):
         """
         super()._reset_internal()
 
+        self.robots[0].controller.position_limits = np.array([
+            self.table_offset - self.GRIPPER_BOUNDS_SIZE,
+            self.table_offset + self.GRIPPER_BOUNDS_SIZE
+        ])
+
         # Reset all object positions using initializer sampler if we're not directly loading from an xml
         if not self.deterministic_reset:
             # Sample from the placement initializer for all objects
@@ -448,28 +463,28 @@ class Push(SingleArmEnv):
             np.array(self.sim.data.body_xpos[self.cube_body_id])
         )
 
-    def _post_action(self, action):
-        """
-        In addition to super method, terminate early if task is completed
+    # def _post_action(self, action):
+    #     """
+    #     In addition to super method, terminate early if task is completed
+    #
+    #     Args:
+    #         action (np.array): Action to execute within the environment
+    #
+    #     Returns:
+    #         3-tuple:
+    #
+    #             - (float) reward from the environment
+    #             - (bool) whether the current episode is completed or not
+    #             - (dict) info about current env step
+    #     """
+    #     reward, done, info = super()._post_action(action)
+    #     done = done or self._check_success()
+    #     return reward, done, info
 
-        Args:
-            action (np.array): Action to execute within the environment
-
-        Returns:
-            3-tuple:
-
-                - (float) reward from the environment
-                - (bool) whether the current episode is completed or not
-                - (dict) info about current env step
-        """
-        reward, done, info = super()._post_action(action)
-        done = done or self._check_success()
-        return reward, done, info
-
-    def _pre_action(self, action, policy_step=False):
-        """Does bounds checking to prevent the gripper from leaving a certain area"""
-        gripper_pos = self.sim.data.body_xpos[self.gripper_body_id] - self.table_offset
-        mask = ((gripper_pos <= self.GRIPPER_BOUNDS_SIZE) | (action[:3] < 0))\
-            & ((gripper_pos >= -self.GRIPPER_BOUNDS_SIZE) | (action[:3] > 0))
-        action[:3] = np.where(mask, action[:3], 0)
-        super()._pre_action(action, policy_step)
+    # def _pre_action(self, action, policy_step=False):
+    #     """Does bounds checking to prevent the gripper from leaving a certain area"""
+    #     gripper_pos = self.sim.data.body_xpos[self.gripper_body_id] - self.table_offset
+    #     mask = ((gripper_pos <= self.GRIPPER_BOUNDS_SIZE) | (action[:3] < 0))\
+    #         & ((gripper_pos >= -self.GRIPPER_BOUNDS_SIZE) | (action[:3] > 0))
+    #     action[:3] = np.where(mask, action[:3], 0)
+    #     super()._pre_action(action, policy_step)
