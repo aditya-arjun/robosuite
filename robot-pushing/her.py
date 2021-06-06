@@ -1,22 +1,30 @@
-import gym
 import numpy as np
-from tianshou.data import Batch, ReplayBuffer, Collector
+from numba import njit
+from tianshou.data import Batch, ReplayBuffer, Collector, VectorReplayBuffer
+from tianshou.data.buffer.manager import _next_index
 
 
-class HERReplayBuffer(ReplayBuffer):
-    def __init__(self, size, env, **kwargs):
-        super().__init__(size, **kwargs)
+class HERReplayBuffer(VectorReplayBuffer):
+    def __init__(self, env, **kwargs):
+        super().__init__(**kwargs)
         self.env = env
 
     def add(self, batch, buffer_ids=None):
+        if buffer_ids is None:
+            buffer_ids = np.arange(self.buffer_num)
         current_index, episode_reward, episode_length, episode_start_index = super().add(batch, buffer_ids)
-        if episode_length[0] > 0:
-            episode = self[episode_start_index[0]:episode_start_index[0] + episode_length[0]]
+        episode_dones = np.argwhere(episode_length > 0)[:, 0]
+        for i in episode_dones:
+            indices = _get_episode_indices(episode_length[i], episode_start_index[i],
+                                           self._extend_offset, self.done,
+                                           self.last_index, self._lengths)
+            episode = self[indices]
             episode.obs, episode.obs_next, episode.rew, episode.done = self.env.her(
                 episode.obs, episode.obs_next
             )
             for b in episode:
-                super().add(b)
+                super().add(b[None, ...], buffer_ids=[buffer_ids[i]])
+
         return current_index, episode_reward, episode_length, episode_start_index
 
     # def sample_index(self, batch_size):
@@ -29,3 +37,14 @@ class HERReplayBuffer(ReplayBuffer):
     #     batch = self[indices]
     #     print(batch)
     #     return self[indices], indices
+
+
+@njit
+def _get_episode_indices(length, start, offset, done, last_index, lengths):
+    indices = np.empty(length, dtype=np.int64)
+    indices[0] = start
+    index = np.array([start])
+    for i in range(length - 1):
+        index = _next_index(index, offset, done, last_index, lengths)
+        indices[i + 1] = index[0]
+    return indices

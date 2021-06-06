@@ -16,12 +16,13 @@ from tianshou.data import Collector
 
 from her import HERReplayBuffer
 from push_env import PushingEnvironment
+from input_norm import InputNorm
 
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--horizon', type=int, default=30)
+    parser.add_argument('--horizon', type=int, default=50)
     parser.add_argument('--control-freq', type=int, default=2)
     parser.add_argument('--buffer-size', type=int, default=10**6)
     parser.add_argument('--hidden-sizes', type=int, nargs='*', default=[64, 64, 64])
@@ -39,8 +40,9 @@ def get_args():
     parser.add_argument('--update-per-step', type=float, default=1)  # number of grad updates per step
     parser.add_argument('--n-step', type=int, default=1)  # number of steps to look ahead
     parser.add_argument('--batch-size', type=int, default=16)
-    parser.add_argument('--test-num', type=int, default=5)  # number of test episodes
-    parser.add_argument('--logdir', type=str, default='log')
+    parser.add_argument('--test-num', type=int, default=10)  # number of test episodes and workers (1 episode per worker)
+    parser.add_argument('--train-num', type=int, default=1)  # number of train workers
+    parser.add_argument('--logdir', type=str, default=None)
     parser.add_argument(
         '--device', type=str,
         default='cuda' if torch.cuda.is_available() else 'cpu')
@@ -50,41 +52,45 @@ def get_args():
 
 
 def main(args):
-    train_env = PushingEnvironment(args.horizon, args.control_freq)
-    args.state_shape = train_env.observation_space.shape
-    args.action_shape = train_env.action_space.shape
-    args.max_action = np.max(train_env.action_space.high)
+    if not args.watch:
+        assert args.logdir is not None
+    env = PushingEnvironment(args.horizon, args.control_freq)
+    train_envs = SubprocVectorEnv(
+        [lambda: PushingEnvironment(args.horizon, args.control_freq) for _ in range(args.train_num)])
+    args.state_shape = env.observation_space.shape
+    args.action_shape = env.action_space.shape
+    args.max_action = np.max(env.action_space.high)
     print("Observations shape:", args.state_shape)
     print("Actions shape:", args.action_shape)
-    print("Action range:", np.min(train_env.action_space.low),
-          np.max(train_env.action_space.high))
+    print("Action range:", np.min(env.action_space.low),
+          np.max(env.action_space.high))
     test_envs = SubprocVectorEnv(
         [lambda: PushingEnvironment(args.horizon, args.control_freq, renderable=args.watch) for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    train_env.seed(args.seed)
+    train_envs.seed(args.seed)
     test_envs.seed(args.seed)
     # model
-    net_a = Net(args.state_shape, hidden_sizes=args.hidden_sizes, device=args.device)
+    net_a = InputNorm(Net(args.state_shape, hidden_sizes=args.hidden_sizes, device=args.device))
     actor = ActorProb(
         net_a, args.action_shape, max_action=args.max_action,
         device=args.device, unbounded=True, conditioned_sigma=True
     ).to(args.device)
     actor_optim = torch.optim.Adam(actor.parameters(), lr=args.actor_lr)
-    net_c1 = Net(args.state_shape, args.action_shape,
-                 hidden_sizes=args.hidden_sizes,
-                 concat=True, device=args.device)
-    net_c2 = Net(args.state_shape, args.action_shape,
-                 hidden_sizes=args.hidden_sizes,
-                 concat=True, device=args.device)
+    net_c1 = InputNorm(Net(args.state_shape, args.action_shape,
+                           hidden_sizes=args.hidden_sizes,
+                           concat=True, device=args.device))
+    net_c2 = InputNorm(Net(args.state_shape, args.action_shape,
+                           hidden_sizes=args.hidden_sizes,
+                           concat=True, device=args.device))
     critic1 = Critic(net_c1, device=args.device).to(args.device)
     critic1_optim = torch.optim.Adam(critic1.parameters(), lr=args.critic_lr)
     critic2 = Critic(net_c2, device=args.device).to(args.device)
     critic2_optim = torch.optim.Adam(critic2.parameters(), lr=args.critic_lr)
 
     if args.auto_alpha:
-        target_entropy = -np.prod(train_env.action_space.shape)
+        target_entropy = -np.prod(env.action_space.shape)
         log_alpha = torch.zeros(1, requires_grad=True, device=args.device)
         alpha_optim = torch.optim.Adam([log_alpha], lr=args.alpha_lr)
         args.alpha = (target_entropy, log_alpha, alpha_optim)
@@ -92,7 +98,7 @@ def main(args):
     policy = SACPolicy(
         actor, actor_optim, critic1, critic1_optim, critic2, critic2_optim,
         tau=args.tau, gamma=args.gamma, alpha=args.alpha,
-        estimation_step=args.n_step, action_space=train_env.action_space)
+        estimation_step=args.n_step, action_space=env.action_space)
 
     # load a previous policy
     if args.resume_path:
@@ -100,21 +106,35 @@ def main(args):
         print("Loaded agent from: ", args.resume_path)
 
     if not args.watch:
-        train(policy, train_env, test_envs, args)
+        train(policy, env, train_envs, test_envs, net_a, net_c1, net_c2, args)
     else:
         test(policy, test_envs, args)
 
 
-def train(policy, train_env, test_envs, args):
+def train(policy, env, train_envs, test_envs, net_a, net_c1, net_c2, args):
+    def preprocess_fn(obs=None, obs_next=None, **kwargs):
+        if obs_next is not None:
+            states = obs_next
+            kwargs["obs_next"] = obs_next
+        else:
+            states = obs
+            kwargs["obs"] = obs
+        for state in states:
+            net_a.update(state)
+            net_c1.update(np.concatenate([state, np.zeros(env.action_space.shape)]))
+            net_c2.update(np.concatenate([state, np.zeros(env.action_space.shape)]))
+
+        return kwargs
+
     # collector
-    buffer = HERReplayBuffer(args.buffer_size, train_env)
-    train_collector = Collector(policy, train_env, buffer, exploration_noise=True)
+    buffer = HERReplayBuffer(env, total_size=args.buffer_size, buffer_num=args.train_num)
+    train_collector = Collector(policy, train_envs, buffer, exploration_noise=True, preprocess_fn=preprocess_fn)
     test_collector = Collector(policy, test_envs)
     train_collector.collect(n_step=args.start_timesteps, random=True)
     # log
     t0 = datetime.datetime.now().strftime("%m%d_%H%M%S")
-    log_file = f'seed_{args.seed}_{t0}_sac'
-    log_path = os.path.join(args.logdir, 'sac', log_file)
+    log_file = f'sac_seed_{args.seed}_{t0}'
+    log_path = os.path.join(args.logdir, log_file)
     writer = SummaryWriter(log_path)
     writer.add_text("args", str(args))
     logger = BasicLogger(writer)
@@ -135,7 +155,7 @@ def train(policy, train_env, test_envs, args):
 
 
 def test(policy, test_envs, args):
-    policy.eval()
+    policy.train()
 
     def preprocess_fn(info=None, **kwargs):
         if info is not None:
