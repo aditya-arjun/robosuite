@@ -115,7 +115,7 @@ class Push(SingleArmEnv):
     CUBE_HALFSIZE = 0.025  # half of side length of block
     GOAL_RADIUS = 0.05  # half of side length of goal square
     SPAWN_AREA_SIZE = 0.15  # half of side length of square where block and goal can spawn
-    GRIPPER_BOUNDS_MIN = np.array([-0.2, -0.2, 0.05])  # x, y, z bounds of gripper position
+    GRIPPER_BOUNDS_MIN = np.array([-0.2, -0.2, 0.034])  # x, y, z bounds of gripper position
     GRIPPER_BOUNDS_MAX = np.array([0.2, 0.2, 0.115])
 
     def __init__(
@@ -193,7 +193,8 @@ class Push(SingleArmEnv):
         """
         return self.compute_reward(
             np.array(self.sim.data.body_xpos[self.goal_body_id]),
-            np.array(self.sim.data.body_xpos[self.cube_body_id])
+            np.array(self.sim.data.body_xpos[self.cube_body_id]),
+            {}
         )
 
     def _load_model(self):
@@ -431,7 +432,7 @@ class Push(SingleArmEnv):
         """
         return np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS
 
-    def compute_reward(self, goal_pos, cube_pos):
+    def compute_reward(self, goal_pos, cube_pos, info):
         return 0 if self.check_success(goal_pos, cube_pos) else -1
 
     # def _post_action(self, action):

@@ -106,12 +106,12 @@ def main(args):
         print("Loaded agent from: ", args.resume_path)
 
     if not args.watch:
-        train(policy, env, train_envs, test_envs, net_a, net_c1, net_c2, args)
+        train(policy, env, train_envs, test_envs, args)
     else:
         test(policy, test_envs, args)
 
 
-def train(policy, env, train_envs, test_envs, net_a, net_c1, net_c2, args):
+def train(policy, env, train_envs, test_envs, args):
     def preprocess_fn(obs=None, obs_next=None, **kwargs):
         if obs_next is not None:
             states = obs_next
@@ -120,9 +120,11 @@ def train(policy, env, train_envs, test_envs, net_a, net_c1, net_c2, args):
             states = obs
             kwargs["obs"] = obs
         for state in states:
-            net_a.update(state)
-            net_c1.update(np.concatenate([state, np.zeros(env.action_space.shape)]))
-            net_c2.update(np.concatenate([state, np.zeros(env.action_space.shape)]))
+            policy.actor.preprocess.update(state)
+            policy.critic1.preprocess.update(np.concatenate([state, np.zeros(env.action_space.shape)]))
+            policy.critic1_old.preprocess.update(np.concatenate([state, np.zeros(env.action_space.shape)]))
+            policy.critic2.preprocess.update(np.concatenate([state, np.zeros(env.action_space.shape)]))
+            policy.critic2_old.preprocess.update(np.concatenate([state, np.zeros(env.action_space.shape)]))
 
         return kwargs
 
@@ -155,7 +157,7 @@ def train(policy, env, train_envs, test_envs, net_a, net_c1, net_c2, args):
 
 
 def test(policy, test_envs, args):
-    policy.train()
+    policy.eval()
 
     def preprocess_fn(info=None, **kwargs):
         if info is not None:

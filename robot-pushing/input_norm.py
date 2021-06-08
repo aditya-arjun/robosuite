@@ -16,6 +16,7 @@ class InputNorm(torch.nn.Module):
         # self.register_buffer("max", torch.full([shape], -float("inf"), dtype=torch.float32, device=net.device))
 
     def forward(self, x, state=None, info={}):
+        assert self.count != 0
         x = torch.as_tensor(x, device=self.net.device)
         mean, std = self.get_mean_std()
         std[(std == 0) | torch.isnan(std)] = 1

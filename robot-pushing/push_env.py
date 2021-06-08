@@ -1,14 +1,17 @@
 import numpy as np
 import gym
 from gym import spaces
-from numba import njit
 
 import robosuite
 from robosuite.controllers import load_controller_config
 import robosuite.utils.macros as macros
 import imageio, tqdm
 
+from her import HERReplayBuffer
+from tianshou.data import Batch
+
 macros.SIMULATION_TIMESTEP = 0.02
+np.set_printoptions(suppress=True)
 
 
 class PushingEnvironment(gym.Env):
@@ -57,6 +60,7 @@ class PushingEnvironment(gym.Env):
 
     def step(self, action):
         next_obs, reward, done, info = self.env.step(np.concatenate([action, [0, 0, 0]]))
+        info["TimeLimit.truncated"] = done
         return_obs = self._get_flat_obs(next_obs)
         if self.renderable:
             info["image"] = self.curr_obs["frontview_image"][::-1]
@@ -74,9 +78,6 @@ class PushingEnvironment(gym.Env):
         """
         obs = np.array(obs)
         obs_next = np.array(obs_next)
-        # fake_goal = obs_next[-1, :3]
-        # obs[:, 6:9] = obs[:, :3] - fake_goal
-        # obs_next[:, 6:9] = obs_next[:, :3] - fake_goal
         # final cube position
         fake_goal = obs_next[-1, :3] - obs_next[-1, 3:6]
         # gripper to goal pos
@@ -103,17 +104,35 @@ class PushingEnvironment(gym.Env):
 
 if __name__ == "__main__":
     np.set_printoptions(suppress=True)
-    target = np.array([-0.1, 0])
     env = PushingEnvironment(50, 2, True)
+    env.seed(0)
+    buf = HERReplayBuffer(env, total_size=20, buffer_num=1)
     obs = env.reset()
-    for i in tqdm.tqdm(range(49)):
+    for i in range(3):
+        buf.add(Batch(
+            obs=[obs],
+            obs_next=[obs],
+            act=[[0, 0, 0]],
+            rew=[-100],
+            done=[False if i < 2 else True]
+        ))
+    actions = [[0, 0, 1]] * 2 + [[0, -1, 0]] * 2 + [[1, 0, -1]] * 2 + [[0, 1, 0]] * 3\
+        + [[0, 0, 0]] * 2 + [[1, 0, 0]] * 2 + [[0, 1, -1]] + [[-1, 0, 0]] * 4
+    for i in tqdm.tqdm(range(18)):
         # print(env.env.robots[0]._joint_positions)
-        print(tuple(obs[:1]))
         img = env.render()
         imageio.imwrite(f"render/{i:03}.png", img)
-        a = env.action_space.sample()
-        a[2] = 1
-        obs, _, done, _ = env.step(a)
+        obs_next, rew, done, _ = env.step(actions[i])
+        if i == 17:
+            done = True
+        buf.add(Batch(
+            obs=[obs],
+            obs_next=[obs_next],
+            act=[actions[i]],
+            rew=[rew],
+            done=[done]
+        ))
+        obs = obs_next
         if done:
             # env.seed(i // 30 + 10)
             env.reset()
