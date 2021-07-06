@@ -17,12 +17,19 @@ from tianshou.data import Collector
 
 from her import HERReplayBuffer
 from push_env import PushingEnvironment
+from stick_push_env import StickPushingEnvironment
 from input_norm import InputNorm
+
+ENV_DICT = {
+    "push": PushingEnvironment,
+    "stick_push": StickPushingEnvironment,
+}
 
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--env', type=str, required=True)
     parser.add_argument('--horizon', type=int, default=50)
     parser.add_argument('--control-freq', type=int, default=2)
     parser.add_argument('--buffer-size', type=int, default=10**6)
@@ -55,9 +62,10 @@ def get_args():
 def main(args):
     if not args.watch:
         assert args.logdir is not None
-    env = PushingEnvironment(args.horizon, args.control_freq)
+    env_fn = ENV_DICT[args.env]
+    env = env_fn(args.horizon, args.control_freq)
     train_envs = SubprocVectorEnv(
-        [lambda: PushingEnvironment(args.horizon, args.control_freq) for _ in range(args.train_num)])
+        [lambda: env_fn(args.horizon, args.control_freq) for _ in range(args.train_num)])
     args.state_shape = env.observation_space.shape
     args.action_shape = env.action_space.shape
     args.max_action = np.max(env.action_space.high)
@@ -66,7 +74,7 @@ def main(args):
     print("Action range:", np.min(env.action_space.low),
           np.max(env.action_space.high))
     test_envs = SubprocVectorEnv(
-        [lambda: PushingEnvironment(args.horizon, args.control_freq, renderable=args.watch) for _ in range(args.test_num)])
+        [lambda: env_fn(args.horizon, args.control_freq, renderable=args.watch) for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
