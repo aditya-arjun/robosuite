@@ -5,6 +5,7 @@ from gym import spaces
 import robosuite
 from robosuite.controllers import load_controller_config
 import robosuite.utils.macros as macros
+import itertools
 import imageio, tqdm
 
 from her import HERReplayBuffer
@@ -15,8 +16,9 @@ np.set_printoptions(suppress=True)
 
 
 class PushingEnvironment(gym.Env):
-    def __init__(self, horizon, control_freq, renderable=False):
+    def __init__(self, horizon, control_freq, num_obstacles, obstacle_reward=-2, renderable=False):
         self.renderable = renderable
+        self.num_obstacles = num_obstacles
         self.env = robosuite.make(
             "Push",
             robots=["Panda"],
@@ -31,12 +33,15 @@ class PushingEnvironment(gym.Env):
             use_object_obs=True,
             use_camera_obs=renderable,
             hard_reset=False,
+            num_obstacles=num_obstacles,
+            obstacle_reward=obstacle_reward,
+            # table_friction=(0.1, 0, 0),
         )
 
         low, high = self.env.action_spec
         self.action_space = spaces.Box(low=low[:3], high=high[:3])
 
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=[12])
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=[12 + 6 * num_obstacles**2])
         self.curr_obs = None
         self.step_num = None
 
@@ -51,7 +56,10 @@ class PushingEnvironment(gym.Env):
             obs["gripper_to_cube_pos"],
             obs["gripper_to_goal_pos"],
             obs["cube_to_goal_pos"],
-        ])
+        ] + list(itertools.chain.from_iterable(zip(
+            [obs[f"gripper_to_obstacle{i}_pos"] for i in range(self.num_obstacles**2)],
+            [obs[f"cube_to_obstacle{i}_pos"] for i in range(self.num_obstacles**2)]
+        ))))
 
     def reset(self):
         self.curr_obs = self.env.reset()
@@ -84,8 +92,8 @@ class PushingEnvironment(gym.Env):
         obs[:, 6:9] = obs[:, :3] - fake_goal
         obs_next[:, 6:9] = obs_next[:, :3] - fake_goal
         # cube to goal pos
-        obs[:, 9:] = (obs[:, :3] - obs[:, 3:6]) - fake_goal
-        obs_next[:, 9:] = (obs_next[:, :3] - obs_next[:, 3:6]) - fake_goal
+        obs[:, 9:12] = (obs[:, :3] - obs[:, 3:6]) - fake_goal
+        obs_next[:, 9:12] = (obs_next[:, :3] - obs_next[:, 3:6]) - fake_goal
         rewards = [self.env.compute_reward(fake_goal, on[:3] - on[3:6], {}) for on in obs_next]
         # rewards = []
         # for on in obs_next:
@@ -104,35 +112,26 @@ class PushingEnvironment(gym.Env):
 
 if __name__ == "__main__":
     np.set_printoptions(suppress=True)
-    env = PushingEnvironment(50, 2, True)
+    env = PushingEnvironment(3, 2, 0, -2, True)
+    # buf = HERReplayBuffer(env, total_size=20, buffer_num=1)
     env.seed(0)
-    buf = HERReplayBuffer(env, total_size=20, buffer_num=1)
     obs = env.reset()
-    for i in range(3):
-        buf.add(Batch(
-            obs=[obs],
-            obs_next=[obs],
-            act=[[0, 0, 0]],
-            rew=[-100],
-            done=[False if i < 2 else True]
-        ))
-    actions = [[0, 0, 1]] * 2 + [[0, -1, 0]] * 2 + [[1, 0, -1]] * 2 + [[0, 1, 0]] * 3\
-        + [[0, 0, 0]] * 2 + [[1, 0, 0]] * 2 + [[0, 1, -1]] + [[-1, 0, 0]] * 4
-    for i in tqdm.tqdm(range(18)):
+    # for i in range(3):
+    #     buf.add(Batch(
+    #         obs=[obs],
+    #         obs_next=[obs],
+    #         act=[[0, 0, 0]],
+    #         rew=[-100],
+    #         done=[False if i < 2 else True]
+    #     ))
+    # actions = [[0, 0, 1]] * 2 + [[0, -1, 0]] * 2 + [[1, 0, -1]] * 2 + [[0, 1, 0]] * 3\
+    #     + [[0, 0, 0]] * 2 + [[1, 0, 0]] * 2 + [[0, 1, -1]] + [[-1, 0, 0]] * 4
+    for i in tqdm.tqdm(range(10)):
         # print(env.env.robots[0]._joint_positions)
         img = env.render()
         imageio.imwrite(f"render/{i:03}.png", img)
-        obs_next, rew, done, _ = env.step(actions[i])
-        if i == 17:
-            done = True
-        buf.add(Batch(
-            obs=[obs],
-            obs_next=[obs_next],
-            act=[actions[i]],
-            rew=[rew],
-            done=[done]
-        ))
+        obs_next, rew, done, _ = env.step(env.action_space.sample())
+        print(obs_next)
         obs = obs_next
         if done:
-            # env.seed(i // 30 + 10)
             env.reset()

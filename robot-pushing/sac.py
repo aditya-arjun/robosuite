@@ -5,6 +5,7 @@ import os
 import datetime
 import pprint
 import imageio
+import shutil
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.policy import SACPolicy
 from tianshou.utils import BasicLogger
@@ -34,7 +35,7 @@ def get_args():
     parser.add_argument('--auto-alpha', default=False, action='store_true')
     parser.add_argument('--alpha-lr', type=float, default=0.0003)
     parser.add_argument("--start-timesteps", type=int, default=300)
-    parser.add_argument('--epochs', type=int, default=1000)
+    parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--step-per-epoch', type=int, default=5000)  # evaluation is performed once per epoch
     parser.add_argument('--step-per-collect', type=int, default=1)  # steps between policy updates
     parser.add_argument('--update-per-step', type=float, default=1)  # number of grad updates per step
@@ -42,6 +43,8 @@ def get_args():
     parser.add_argument('--batch-size', type=int, default=16)
     parser.add_argument('--test-num', type=int, default=10)  # number of test episodes and workers (1 episode per worker)
     parser.add_argument('--train-num', type=int, default=1)  # number of train workers
+    parser.add_argument('--num-obstacles', type=int, default=0)
+    parser.add_argument('--obstacle-reward', type=int, default=-2)
     parser.add_argument('--logdir', type=str, default=None)
     parser.add_argument(
         '--device', type=str,
@@ -54,9 +57,9 @@ def get_args():
 def main(args):
     if not args.watch:
         assert args.logdir is not None
-    env = PushingEnvironment(args.horizon, args.control_freq)
+    env = PushingEnvironment(args.horizon, args.control_freq, args.num_obstacles, args.obstacle_reward)
     train_envs = SubprocVectorEnv(
-        [lambda: PushingEnvironment(args.horizon, args.control_freq) for _ in range(args.train_num)])
+        [lambda: PushingEnvironment(args.horizon, args.control_freq, args.num_obstacles, args.obstacle_reward) for _ in range(args.train_num)])
     args.state_shape = env.observation_space.shape
     args.action_shape = env.action_space.shape
     args.max_action = np.max(env.action_space.high)
@@ -65,25 +68,25 @@ def main(args):
     print("Action range:", np.min(env.action_space.low),
           np.max(env.action_space.high))
     test_envs = SubprocVectorEnv(
-        [lambda: PushingEnvironment(args.horizon, args.control_freq, renderable=args.watch) for _ in range(args.test_num)])
+        [lambda: PushingEnvironment(args.horizon, args.control_freq, args.num_obstacles, args.obstacle_reward, renderable=args.watch) for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     train_envs.seed(args.seed)
     test_envs.seed(args.seed)
     # model
-    net_a = InputNorm(Net(args.state_shape, hidden_sizes=args.hidden_sizes, device=args.device))
+    net_a = InputNorm(args.num_obstacles, args.state_shape, hidden_sizes=args.hidden_sizes, device=args.device)
     actor = ActorProb(
         net_a, args.action_shape, max_action=args.max_action,
         device=args.device, unbounded=True, conditioned_sigma=True
     ).to(args.device)
     actor_optim = torch.optim.Adam(actor.parameters(), lr=args.actor_lr)
-    net_c1 = InputNorm(Net(args.state_shape, args.action_shape,
-                           hidden_sizes=args.hidden_sizes,
-                           concat=True, device=args.device))
-    net_c2 = InputNorm(Net(args.state_shape, args.action_shape,
-                           hidden_sizes=args.hidden_sizes,
-                           concat=True, device=args.device))
+    net_c1 = InputNorm(args.num_obstacles, args.state_shape, args.action_shape,
+                       hidden_sizes=args.hidden_sizes,
+                       concat=True, device=args.device)
+    net_c2 = InputNorm(args.num_obstacles, args.state_shape, args.action_shape,
+                       hidden_sizes=args.hidden_sizes,
+                       concat=True, device=args.device)
     critic1 = Critic(net_c1, device=args.device).to(args.device)
     critic1_optim = torch.optim.Adam(critic1.parameters(), lr=args.critic_lr)
     critic2 = Critic(net_c2, device=args.device).to(args.device)
@@ -158,6 +161,8 @@ def train(policy, env, train_envs, test_envs, args):
 
 def test(policy, test_envs, args):
     policy.eval()
+    shutil.rmtree("render")
+    os.makedirs("render")
 
     def preprocess_fn(info=None, **kwargs):
         if info is not None:
