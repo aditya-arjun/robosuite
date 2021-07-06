@@ -1,13 +1,12 @@
 from collections import OrderedDict
 import numpy as np
 
-from robosuite.utils.transform_utils import convert_quat
 from robosuite.utils.mjcf_utils import CustomMaterial
 
 from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
 
 from robosuite.models.arenas import TableArena
-from robosuite.models.objects import BoxObject
+from robosuite.models.objects import BoxObject, CylinderObject
 from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.placement_samplers import UniformRandomSampler
 from robosuite.utils.observables import Observable, sensor
@@ -110,8 +109,12 @@ class StickPush(SingleArmEnv):
         AssertionError: [Invalid number of robots specified]
     """
 
-    CUBE_HALFSIZE = 0.022
-    STICK_HALFLENGTH = 0.05
+    CUBE_HALFSIZE = 0.025  # half of side length of block
+    GOAL_RADIUS = 0.05  # half of side length of goal square
+    SPAWN_AREA_SIZE = 0.15  # half of side length of square where block and goal can spawn
+    GRIPPER_BOUNDS_MIN = np.array([-0.2, -0.2, 0.0])  # x, y, z bounds of gripper position
+    GRIPPER_BOUNDS_MAX = np.array([0.2, 0.2, 0.2])
+    STICK_HALFLENGTH = 0.06
 
     def __init__(
         self,
@@ -187,13 +190,11 @@ class StickPush(SingleArmEnv):
         Returns:
             float: reward value
         """
-        reward = -1
-
-        # sparse completion reward
-        if self._check_success():
-            reward = 0
-
-        return reward
+        return self.compute_reward(
+            np.array(self.sim.data.body_xpos[self.goal_body_id]),
+            np.array(self.sim.data.body_xpos[self.cube_body_id]),
+            {}
+        )
 
     def _load_model(self):
         """
@@ -265,9 +266,9 @@ class StickPush(SingleArmEnv):
             size=[self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
             material=redwood,
         )
-        self.goal = BoxObject(
+        self.goal = CylinderObject(
             name="goal",
-            size=[self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, 0.001],
+            size=[self.GOAL_RADIUS, 0.001],
             material=greenwood,
             obj_type="visual",
             joints=None,
@@ -392,6 +393,25 @@ class StickPush(SingleArmEnv):
                 return obs_cache["cube_pos"] - obs_cache["goal_pos"] if \
                     "cube_pos" in obs_cache and "goal_pos" in obs_cache else np.zeros(3)
 
+            @sensor(modality=modality)
+            def stick_pos(obs_cache):
+                return np.array(self.sim.data.body_xpos[self.stick_body_id])
+
+            @sensor(modality=modality)
+            def gripper_to_stick_pos(obs_cache):
+                return obs_cache[f"{pf}eef_pos"] - obs_cache["stick_pos"] if \
+                    f"{pf}eef_pos" in obs_cache and "stick_pos" in obs_cache else np.zeros(3)
+
+            @sensor(modality=modality)
+            def stick_to_cube_pos(obs_cache):
+                return obs_cache["stick_pos"] - obs_cache["cube_pos"] if \
+                    "stick_pos" in obs_cache and "cube_pos" in obs_cache else np.zeros(3)
+
+            @sensor(modality=modality)
+            def stick_to_goal_pos(obs_cache):
+                return obs_cache["stick_pos"] - obs_cache["goal_pos"] if \
+                    "stick_pos" in obs_cache and "goal_pos" in obs_cache else np.zeros(3)
+
             sensors = [cube_pos, gripper_to_cube_pos, goal_pos, gripper_to_goal_pos, cube_to_goal_pos]
             names = [s.__name__ for s in sensors]
 
@@ -410,6 +430,11 @@ class StickPush(SingleArmEnv):
         Resets simulation internal configurations.
         """
         super()._reset_internal()
+
+        self.robots[0].controller.position_limits = np.array([
+            self.table_offset + self.GRIPPER_BOUNDS_MIN,
+            self.table_offset + self.GRIPPER_BOUNDS_MAX
+        ])
 
         # Reset all object positions using initializer sampler if we're not directly loading from an xml
         if not self.deterministic_reset:
@@ -464,35 +489,32 @@ class StickPush(SingleArmEnv):
         #
         # # return True if at least one corner is within the goal square
         # return np.logical_and(corners_2d <= goal_max, corners_2d >= goal_min).all(axis=1).any()
-        return np.max(np.abs(goal_pos[:2] - cube_pos[:2])) <= self.CUBE_HALFSIZE
+        return np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS
 
-    def _check_success(self):
-        return self.check_success(
-            np.array(self.sim.data.body_xpos[self.goal_body_id]),
-            np.array(self.sim.data.body_xpos[self.cube_body_id])
-        )
+    def compute_reward(self, goal_pos, cube_pos, info):
+        return 0 if self.check_success(goal_pos, cube_pos) else -1
 
-    def _post_action(self, action):
-        """
-        In addition to super method, terminate early if task is completed
+    # def _post_action(self, action):
+    #     """
+    #     In addition to super method, terminate early if task is completed
+    #
+    #     Args:
+    #         action (np.array): Action to execute within the environment
+    #
+    #     Returns:
+    #         3-tuple:
+    #
+    #             - (float) reward from the environment
+    #             - (bool) whether the current episode is completed or not
+    #             - (dict) info about current env step
+    #     """
+    #     reward, done, info = super()._post_action(action)
+    #     done = done or self._check_success()
+    #     return reward, done, info
 
-        Args:
-            action (np.array): Action to execute within the environment
-
-        Returns:
-            3-tuple:
-
-                - (float) reward from the environment
-                - (bool) whether the current episode is completed or not
-                - (dict) info about current env step
-        """
-        reward, done, info = super()._post_action(action)
-        done = done or self._check_success()
-        return reward, done, info
-
-    def _pre_action(self, action, policy_step=False):
-        gripper_pos = self.sim.data.body_xpos[self.gripper_body_id]
-        if gripper_pos[0] < 0 or action[0] < 0:
-            super()._pre_action(action, policy_step)
-        else:
-            super()._pre_action(np.zeros(7), policy_step)
+    # def _pre_action(self, action, policy_step=False):
+    #     gripper_pos = self.sim.data.body_xpos[self.gripper_body_id]
+    #     if gripper_pos[0] < 0 or action[0] < 0:
+    #         super()._pre_action(action, policy_step)
+    #     else:
+    #         super()._pre_action(np.zeros(7), policy_step)

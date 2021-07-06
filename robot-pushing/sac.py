@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import os
 import datetime
+import shutil
 import pprint
 import imageio
 from torch.utils.tensorboard import SummaryWriter
@@ -158,6 +159,8 @@ def train(policy, env, train_envs, test_envs, args):
 
 def test(policy, test_envs, args):
     policy.eval()
+    shutil.rmtree("render")
+    os.makedirs("render")
 
     def preprocess_fn(info=None, **kwargs):
         if info is not None:
