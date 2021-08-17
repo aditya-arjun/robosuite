@@ -10,6 +10,7 @@ from robosuite.models.objects import BoxObject, CylinderObject
 from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.placement_samplers import UniformRandomSampler
 from robosuite.utils.observables import Observable, sensor
+from robosuite.utils.mjcf_utils import array_to_string
 
 
 class StickPush(SingleArmEnv):
@@ -110,11 +111,26 @@ class StickPush(SingleArmEnv):
     """
 
     CUBE_HALFSIZE = 0.025  # half of side length of block
-    GOAL_RADIUS = 0.05  # half of side length of goal square
-    SPAWN_AREA_SIZE = 0.15  # half of side length of square where block and goal can spawn
-    GRIPPER_BOUNDS_MIN = np.array([-0.2, -0.2, 0.0])  # x, y, z bounds of gripper position
-    GRIPPER_BOUNDS_MAX = np.array([0.2, 0.2, 0.2])
+    GOAL_RADIUS = 0.05  # radius of goal circle
     STICK_HALFLENGTH = 0.06
+    STICK_HALFWIDTH = 0.025
+    GRIPPER_BOUNDS = np.array([
+        [-0.2, 0],  # x
+        [-0.1, 0.1],  # y
+        [0, 0.2],  # z
+    ])
+    STICK_SPAWN_AREA = np.array([
+        [-0.2, -0.08],  # x
+        [-0.1, 0.1],  # y
+    ])
+    CUBE_SPAWN_AREA = np.array([
+        [-0.05, 0],  # x
+        [-0.1, 0.1],  # y
+    ])
+    GOAL_SPAWN_AREA = np.array([
+        [0.07, 0.12],  # x
+        [-0.1, 0.1],  # y
+    ])
 
     def __init__(
         self,
@@ -206,28 +222,6 @@ class StickPush(SingleArmEnv):
         xpos = self.robots[0].robot_model.base_xpos_offset["table"](self.table_full_size[0])
         self.robots[0].robot_model.set_base_xpos(xpos)
 
-        # right side of table ([0, 0.2])
-        # self.robots[0].init_qpos = np.array([
-        #     0.2602561,
-        #     1.09212466,
-        #     0.03546359,
-        #     -1.78849099,
-        #     -0.2233546,
-        #     2.93094696,
-        #     1.27766025
-        # ])
-
-        # middle of table ([0, 0])
-        # self.robots[0].init_qpos = np.array([
-        #     0,
-        #     1.0431,
-        #     0,
-        #     -1.9429,
-        #     0,
-        #     3.0427,
-        #     0.78539816,
-        # ])
-
         # load model for table top workspace
         mujoco_arena = TableArena(
             table_full_size=self.table_full_size,
@@ -238,45 +232,22 @@ class StickPush(SingleArmEnv):
         # Arena always gets set to zero origin
         mujoco_arena.set_origin([0, 0, 0])
 
-        # initialize objects of interest
-        tex_attrib = {
-            "type": "cube",
-        }
-        mat_attrib = {
-            "texrepeat": "1 1",
-            "specular": "0.4",
-            "shininess": "0.1",
-        }
-        redwood = CustomMaterial(
-            texture="WoodRed",
-            tex_name="redwood",
-            mat_name="redwood_mat",
-            tex_attrib=tex_attrib,
-            mat_attrib=mat_attrib,
-        )
-        greenwood = CustomMaterial(
-            texture="WoodGreen",
-            tex_name="greenwood",
-            mat_name="greenwood_mat",
-            tex_attrib=tex_attrib,
-            mat_attrib=mat_attrib,
-        )
         self.cube = BoxObject(
             name="cube",
             size=[self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
-            material=redwood,
+            rgba=(1, 0, 0, 1)
         )
         self.goal = CylinderObject(
             name="goal",
             size=[self.GOAL_RADIUS, 0.001],
-            material=greenwood,
+            rgba=(0, 1, 0, 1),
             obj_type="visual",
             joints=None,
         )
         self.stick = BoxObject(
             name="stick",
-            size=[self.STICK_HALFLENGTH, self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
-            material=greenwood,
+            size=[self.STICK_HALFLENGTH, self.STICK_HALFWIDTH, self.STICK_HALFWIDTH],
+            rgba=(0, 0, 1, 1)
         )
 
         # Create placement initializer
@@ -287,8 +258,8 @@ class StickPush(SingleArmEnv):
             self.cube_initializer = UniformRandomSampler(
                 name="CubeSampler",
                 mujoco_objects=self.cube,
-                x_range=[-0.2, 0.0],
-                y_range=[-0.2, 0.2],
+                x_range=self.CUBE_SPAWN_AREA[0],
+                y_range=self.CUBE_SPAWN_AREA[1],
                 rotation=0,
                 ensure_object_boundary_in_range=True,
                 ensure_valid_placement=True,
@@ -303,8 +274,8 @@ class StickPush(SingleArmEnv):
             self.goal_initializer = UniformRandomSampler(
                 name="GoalSampler",
                 mujoco_objects=self.goal,
-                x_range=[self.STICK_HALFLENGTH / 2, self.STICK_HALFLENGTH * 1.5],
-                y_range=[-0.2, 0.2],
+                x_range=self.GOAL_SPAWN_AREA[0],
+                y_range=self.GOAL_SPAWN_AREA[1],
                 rotation=0,
                 ensure_object_boundary_in_range=True,
                 ensure_valid_placement=True,
@@ -319,8 +290,8 @@ class StickPush(SingleArmEnv):
             self.stick_initializer = UniformRandomSampler(
                 name="StickSampler",
                 mujoco_objects=self.stick,
-                x_range=[-0.2, 0.0],
-                y_range=[-0.2, 0.2],
+                x_range=self.STICK_SPAWN_AREA[0],
+                y_range=self.STICK_SPAWN_AREA[1],
                 rotation=0,
                 ensure_object_boundary_in_range=True,
                 ensure_valid_placement=True,
@@ -334,6 +305,36 @@ class StickPush(SingleArmEnv):
             mujoco_robots=[robot.robot_model for robot in self.robots], 
             mujoco_objects=[self.cube, self.goal, self.stick],
         )
+        self._vis_gripper_bounds()
+
+    def _vis_gripper_bounds(self):
+        color = (0, 0, 0, 0.2)
+        width = 0.007
+        height = 0.001
+        center = (self.GRIPPER_BOUNDS[:, 0] + self.GRIPPER_BOUNDS[:, 1]) / 2
+        dims = (self.GRIPPER_BOUNDS[:, 1] - self.GRIPPER_BOUNDS[:, 0]) / 2
+        sizes = [
+            [width, dims[1], height],  # minx
+            [dims[0], width, height],  # miny
+            [width, dims[1], height],  # maxx
+            [dims[0], width, height],  # maxy
+        ]
+        positions = [
+            [self.GRIPPER_BOUNDS[0, 0] + width, center[1], 0.001],
+            [center[0], self.GRIPPER_BOUNDS[1, 0] + width, 0.001],
+            [self.GRIPPER_BOUNDS[0, 1] - width, center[1], 0.001],
+            [center[0], self.GRIPPER_BOUNDS[1, 1] - width, 0.001],
+        ]
+        for i, (size, position) in enumerate(zip(sizes, positions)):
+            obj = BoxObject(
+                name=f"bounds{i}",
+                size=size,
+                rgba=color,
+                obj_type="visual",
+                joints=None,
+            )
+            obj.get_obj().set("pos", array_to_string(self.table_offset + position))
+            self.model.merge_objects([obj])
 
     def _setup_references(self):
         """
@@ -412,7 +413,11 @@ class StickPush(SingleArmEnv):
                 return obs_cache["stick_pos"] - obs_cache["goal_pos"] if \
                     "stick_pos" in obs_cache and "goal_pos" in obs_cache else np.zeros(3)
 
-            sensors = [cube_pos, gripper_to_cube_pos, goal_pos, gripper_to_goal_pos, cube_to_goal_pos]
+            sensors = [
+                gripper_to_cube_pos, gripper_to_goal_pos, cube_to_goal_pos,
+                gripper_to_stick_pos, stick_to_cube_pos, stick_to_goal_pos,
+                cube_pos, goal_pos, stick_pos
+            ]
             names = [s.__name__ for s in sensors]
 
             # Create observables
@@ -431,20 +436,8 @@ class StickPush(SingleArmEnv):
         """
         super()._reset_internal()
 
-        self.robots[0].controller.position_limits = np.array([
-            self.table_offset + self.GRIPPER_BOUNDS_MIN,
-            self.table_offset + self.GRIPPER_BOUNDS_MAX
-        ])
-
         # Reset all object positions using initializer sampler if we're not directly loading from an xml
         if not self.deterministic_reset:
-            # Sample from the placement initializer for all objects
-            # gripper_pos = self.sim.data.body_xpos[self.gripper_body_id]
-            # cube_pos = gripper_pos
-            # while np.max(np.abs(cube_pos[:2] - gripper_pos[:2])) <= self.CUBE_HALFSIZE + 0.013:
-            #     cube_placement = self.cube_initializer.sample()
-            #     cube_pos, cube_quat, _ = cube_placement["cube"]
-
             cube_placement = self.cube_initializer.sample()
             cube_pos, cube_quat, _ = cube_placement["cube"]
             self.sim.data.set_joint_qpos(self.cube.joints[0], np.concatenate([np.array(cube_pos), np.array(cube_quat)]))
@@ -465,56 +458,11 @@ class StickPush(SingleArmEnv):
         Returns:
             bool: True if cube has reached goal.
         """
-        # compute 2D bounding box of goal square
-        # goal_pos = np.array(self.sim.data.body_xpos[self.goal_body_id])[:2]
-        # goal_max = goal_pos + np.array([self.CUBE_HALFSIZE, self.CUBE_HALFSIZE])
-        # goal_min = goal_pos - np.array([self.CUBE_HALFSIZE, self.CUBE_HALFSIZE])
-        #
-        # # compute the world coordinates of all 8 corners of the cube
-        # cube_pos = np.array(self.sim.data.body_xpos[self.cube_body_id])
-        # cube_mat = np.array(self.sim.data.body_xmat[self.cube_body_id]).reshape(3, 3)
-        # corners = np.array([
-        #     [self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
-        #     [self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
-        #     [self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
-        #     [self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
-        #     [-self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
-        #     [-self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
-        #     [-self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
-        #     [-self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE, -self.CUBE_HALFSIZE],
-        # ])
-        # corners_world = (cube_mat @ corners.T).T + cube_pos
-        # # project corners onto table
-        # corners_2d = corners_world[:, :2]
-        #
-        # # return True if at least one corner is within the goal square
-        # return np.logical_and(corners_2d <= goal_max, corners_2d >= goal_min).all(axis=1).any()
         return np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS
 
     def compute_reward(self, goal_pos, cube_pos, info):
         return 0 if self.check_success(goal_pos, cube_pos) else -1
 
-    # def _post_action(self, action):
-    #     """
-    #     In addition to super method, terminate early if task is completed
-    #
-    #     Args:
-    #         action (np.array): Action to execute within the environment
-    #
-    #     Returns:
-    #         3-tuple:
-    #
-    #             - (float) reward from the environment
-    #             - (bool) whether the current episode is completed or not
-    #             - (dict) info about current env step
-    #     """
-    #     reward, done, info = super()._post_action(action)
-    #     done = done or self._check_success()
-    #     return reward, done, info
-
-    # def _pre_action(self, action, policy_step=False):
-    #     gripper_pos = self.sim.data.body_xpos[self.gripper_body_id]
-    #     if gripper_pos[0] < 0 or action[0] < 0:
-    #         super()._pre_action(action, policy_step)
-    #     else:
-    #         super()._pre_action(np.zeros(7), policy_step)
+    def _pre_action(self, action, policy_step=False):
+        super()._pre_action(action, policy_step)
+        self.robots[0].controller.position_limits = self.GRIPPER_BOUNDS.T + self.table_offset
