@@ -1,3 +1,6 @@
+import os
+import shutil
+
 import numpy as np
 import gym
 from gym import spaces
@@ -103,35 +106,36 @@ class PushingEnvironment(gym.Env):
 
 
 if __name__ == "__main__":
-    np.set_printoptions(suppress=True)
-    env = PushingEnvironment(50, 2, True)
+    shutil.rmtree("render")
+    os.makedirs("render")
+    env = PushingEnvironment(1, 2, True)
     env.seed(0)
-    buf = HERReplayBuffer(env, total_size=20, buffer_num=1)
+    # buf = HERReplayBuffer(env, total_size=20, buffer_num=1)
     obs = env.reset()
-    for i in range(3):
-        buf.add(Batch(
-            obs=[obs],
-            obs_next=[obs],
-            act=[[0, 0, 0]],
-            rew=[-100],
-            done=[False if i < 2 else True]
-        ))
-    actions = [[0, 0, 1]] * 2 + [[0, -1, 0]] * 2 + [[1, 0, -1]] * 2 + [[0, 1, 0]] * 3\
-        + [[0, 0, 0]] * 2 + [[1, 0, 0]] * 2 + [[0, 1, -1]] + [[-1, 0, 0]] * 4
-    for i in tqdm.tqdm(range(18)):
+    # for i in range(3):
+    #     buf.add(Batch(
+    #         obs=[obs],
+    #         obs_next=[obs],
+    #         act=[[0, 0, 0]],
+    #         rew=[-100],
+    #         done=[False if i < 2 else True]
+    #     ))
+    # actions = [[0, 0, 1]] * 2 + [[0, -1, 0]] * 2 + [[1, 0, -1]] * 2 + [[0, 1, 0]] * 3\
+    #     + [[0, 0, 0]] * 2 + [[1, 0, 0]] * 2 + [[0, 1, -1]] + [[-1, 0, 0]] * 4
+    for i in tqdm.tqdm(range(300)):
         # print(env.env.robots[0]._joint_positions)
         img = env.render()
         imageio.imwrite(f"render/{i:03}.png", img)
-        obs_next, rew, done, _ = env.step(actions[i])
-        if i == 17:
-            done = True
-        buf.add(Batch(
-            obs=[obs],
-            obs_next=[obs_next],
-            act=[actions[i]],
-            rew=[rew],
-            done=[done]
-        ))
+        obs_next, rew, done, _ = env.step(env.action_space.sample())
+        # if i == 17:
+        #     done = True
+        # buf.add(Batch(
+        #     obs=[obs],
+        #     obs_next=[obs_next],
+        #     act=[actions[i]],
+        #     rew=[rew],
+        #     done=[done]
+        # ))
         obs = obs_next
         if done:
             # env.seed(i // 30 + 10)

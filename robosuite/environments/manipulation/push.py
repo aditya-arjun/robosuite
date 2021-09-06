@@ -7,7 +7,7 @@ from robosuite.utils.mjcf_utils import CustomMaterial
 from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
 
 from robosuite.models.arenas import TableArena
-from robosuite.models.objects import BoxObject, CylinderObject
+from robosuite.models.objects import BoxObject, CylinderObject, BallObject
 from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.placement_samplers import UniformRandomSampler
 from robosuite.utils.observables import Observable, sensor
@@ -115,8 +115,11 @@ class Push(SingleArmEnv):
     CUBE_HALFSIZE = 0.025  # half of side length of block
     GOAL_RADIUS = 0.05  # half of side length of goal square
     SPAWN_AREA_SIZE = 0.15  # half of side length of square where block and goal can spawn
-    GRIPPER_BOUNDS_MIN = np.array([-0.2, -0.2, 0.034])  # x, y, z bounds of gripper position
-    GRIPPER_BOUNDS_MAX = np.array([0.2, 0.2, 0.115])
+    GRIPPER_BOUNDS = np.array([
+        [-0.2, 0.2],  # x
+        [-0.2, 0.2],  # y
+        [0, 0.2],  # z
+    ])
 
     def __init__(
         self,
@@ -250,38 +253,15 @@ class Push(SingleArmEnv):
         # Arena always gets set to zero origin
         mujoco_arena.set_origin([0, 0, 0])
 
-        # initialize objects of interest
-        tex_attrib = {
-            "type": "cube",
-        }
-        mat_attrib = {
-            "texrepeat": "1 1",
-            "specular": "0.4",
-            "shininess": "0.1",
-        }
-        redwood = CustomMaterial(
-            texture="WoodRed",
-            tex_name="redwood",
-            mat_name="redwood_mat",
-            tex_attrib=tex_attrib,
-            mat_attrib=mat_attrib,
-        )
-        greenwood = CustomMaterial(
-            texture="WoodGreen",
-            tex_name="greenwood",
-            mat_name="greenwood_mat",
-            tex_attrib=tex_attrib,
-            mat_attrib=mat_attrib,
-        )
         self.cube = BoxObject(
             name="cube",
             size=[self.CUBE_HALFSIZE, self.CUBE_HALFSIZE, self.CUBE_HALFSIZE],
-            material=redwood,
+            rgba=(1, 0, 0, 1)
         )
         self.goal = CylinderObject(
             name="goal",
             size=[self.GOAL_RADIUS, 0.001],
-            material=greenwood,
+            rgba=(0, 1, 0, 1),
             obj_type="visual",
             joints=None,
         )
@@ -402,10 +382,7 @@ class Push(SingleArmEnv):
         """
         super()._reset_internal()
 
-        self.robots[0].controller.position_limits = np.array([
-            self.table_offset + self.GRIPPER_BOUNDS_MIN,
-            self.table_offset + self.GRIPPER_BOUNDS_MAX
-        ])
+        self.robots[0].controller.position_limits = self.GRIPPER_BOUNDS.T + self.table_offset
 
         # Reset all object positions using initializer sampler if we're not directly loading from an xml
         if not self.deterministic_reset:
@@ -434,29 +411,3 @@ class Push(SingleArmEnv):
 
     def compute_reward(self, goal_pos, cube_pos, info):
         return 0 if self.check_success(goal_pos, cube_pos) else -1
-
-    # def _post_action(self, action):
-    #     """
-    #     In addition to super method, terminate early if task is completed
-    #
-    #     Args:
-    #         action (np.array): Action to execute within the environment
-    #
-    #     Returns:
-    #         3-tuple:
-    #
-    #             - (float) reward from the environment
-    #             - (bool) whether the current episode is completed or not
-    #             - (dict) info about current env step
-    #     """
-    #     reward, done, info = super()._post_action(action)
-    #     done = done or self._check_success()
-    #     return reward, done, info
-
-    # def _pre_action(self, action, policy_step=False):
-    #     """Does bounds checking to prevent the gripper from leaving a certain area"""
-    #     gripper_pos = self.sim.data.body_xpos[self.gripper_body_id] - self.table_offset
-    #     mask = ((gripper_pos <= self.GRIPPER_BOUNDS_SIZE) | (action[:3] < 0))\
-    #         & ((gripper_pos >= -self.GRIPPER_BOUNDS_SIZE) | (action[:3] > 0))
-    #     action[:3] = np.where(mask, action[:3], 0)
-    #     super()._pre_action(action, policy_step)
