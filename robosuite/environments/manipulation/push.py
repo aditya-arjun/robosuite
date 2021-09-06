@@ -114,7 +114,6 @@ class Push(SingleArmEnv):
 
     CUBE_HALFSIZE = 0.025  # half of side length of block
     GOAL_RADIUS = 0.05  # half of side length of goal square
-    OBSTACLE_RADIUS = 0.02
     SPAWN_AREA_SIZE = 0.15  # half of side length of square where block and goal can spawn
     GRIPPER_BOUNDS = np.array([
         [-0.2, 0.2],  # x
@@ -122,6 +121,8 @@ class Push(SingleArmEnv):
         [0, 0.2],  # z
     ])
     OBSTACLE_REWARD = -2
+    OBSTACLE_GRID_RESOLUTION = 10  # side length of obstacle grid
+    OBSTACLE_HALF_SIDELENGTH = SPAWN_AREA_SIZE / OBSTACLE_GRID_RESOLUTION
 
     def __init__(
         self,
@@ -150,8 +151,6 @@ class Push(SingleArmEnv):
         camera_depths=False,
         num_obstacles=0,
     ):
-        # num obstacles must be a perfect square
-        assert int(np.sqrt(num_obstacles)) == np.sqrt(num_obstacles)
         self.num_obstacles = num_obstacles
 
         # settings for table top
@@ -272,9 +271,9 @@ class Push(SingleArmEnv):
             joints=None,
         )
         self.obstacles = [
-            CylinderObject(
+            BoxObject(
                 name=f"obstacle{i}",
-                size=[self.OBSTACLE_RADIUS, 0.001],
+                size=[self.OBSTACLE_HALF_SIDELENGTH, self.OBSTACLE_HALF_SIDELENGTH, 0.001],
                 rgba=(1, 1, 0, 1),
                 obj_type="visual",
                 joints=None
@@ -448,11 +447,12 @@ class Push(SingleArmEnv):
             self.sim.model.body_pos[self.goal_body_id] = np.array([goal_pos])
             self.sim.model.body_quat[self.goal_body_id] = np.array([goal_quat])
 
-            obstacle_grid = np.mgrid[
-                -self.SPAWN_AREA_SIZE:self.SPAWN_AREA_SIZE:complex(0, int(np.sqrt(self.num_obstacles))),
-                -self.SPAWN_AREA_SIZE:self.SPAWN_AREA_SIZE:complex(0, int(np.sqrt(self.num_obstacles)))
-            ].reshape(2, -1).T
-            for (x, y), obstacle_id in zip(obstacle_grid, self.obstacle_body_ids):
+            start = -self.SPAWN_AREA_SIZE + self.OBSTACLE_HALF_SIDELENGTH
+            stop = self.SPAWN_AREA_SIZE - self.OBSTACLE_HALF_SIDELENGTH
+            step = complex(0, self.OBSTACLE_GRID_RESOLUTION)
+            obstacle_grid = np.mgrid[start:stop:step, start:stop:step].reshape(2, -1).T
+            obstacle_locations = np.random.default_rng().choice(obstacle_grid, self.num_obstacles, replace=False, axis=0)
+            for (x, y), obstacle_id in zip(obstacle_locations, self.obstacle_body_ids):
                 self.sim.model.body_pos[obstacle_id] = np.array(
                     [[self.table_offset[0] + x, self.table_offset[1] + y, self.table_offset[2] + 0.001]]
                 )
@@ -476,6 +476,6 @@ class Push(SingleArmEnv):
         if np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS:
             return 0
         if self.num_obstacles > 0:
-            if np.any(np.linalg.norm(self.obstacle_pos[:, :2] - cube_pos[:2], axis=-1) <= self.OBSTACLE_RADIUS):
+            if np.any(np.max(np.abs(self.obstacle_pos[:, :2] - cube_pos[:2]), axis=-1) <= self.OBSTACLE_HALF_SIDELENGTH):
                 return self.OBSTACLE_REWARD
         return -1
