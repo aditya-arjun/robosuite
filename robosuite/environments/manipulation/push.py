@@ -114,12 +114,14 @@ class Push(SingleArmEnv):
 
     CUBE_HALFSIZE = 0.025  # half of side length of block
     GOAL_RADIUS = 0.05  # half of side length of goal square
+    OBSTACLE_RADIUS = 0.02
     SPAWN_AREA_SIZE = 0.15  # half of side length of square where block and goal can spawn
     GRIPPER_BOUNDS = np.array([
         [-0.2, 0.2],  # x
         [-0.2, 0.2],  # y
         [0, 0.2],  # z
     ])
+    OBSTACLE_REWARD = -2
 
     def __init__(
         self,
@@ -146,7 +148,11 @@ class Push(SingleArmEnv):
         camera_heights=256,
         camera_widths=256,
         camera_depths=False,
+        num_obstacles=0,
     ):
+        # num obstacles must be a perfect square
+        assert int(np.sqrt(num_obstacles)) == np.sqrt(num_obstacles)
+        self.num_obstacles = num_obstacles
 
         # settings for table top
         self.table_full_size = table_full_size
@@ -265,6 +271,16 @@ class Push(SingleArmEnv):
             obj_type="visual",
             joints=None,
         )
+        self.obstacles = [
+            CylinderObject(
+                name=f"obstacle{i}",
+                size=[self.OBSTACLE_RADIUS, 0.001],
+                rgba=(1, 1, 0, 1),
+                obj_type="visual",
+                joints=None
+            )
+            for i in range(self.num_obstacles)
+        ]
 
         # Create placement initializer
         if self.cube_initializer is not None:
@@ -303,7 +319,7 @@ class Push(SingleArmEnv):
         self.model = ManipulationTask(
             mujoco_arena=mujoco_arena,
             mujoco_robots=[robot.robot_model for robot in self.robots], 
-            mujoco_objects=[self.cube, self.goal],
+            mujoco_objects=[self.cube, self.goal] + self.obstacles,
         )
 
     def _setup_references(self):
@@ -318,6 +334,10 @@ class Push(SingleArmEnv):
         self.cube_body_id = self.sim.model.body_name2id(self.cube.root_body)
         self.goal_body_id = self.sim.model.body_name2id(self.goal.root_body)
         self.gripper_body_id = self.sim.model.body_name2id(f"{self.robots[0].gripper.naming_prefix}pushing_gripper")
+        self.obstacle_body_ids = [
+            self.sim.model.body_name2id(obstacle.root_body)
+            for obstacle in self.obstacles
+        ]
 
     def _setup_observables(self):
         """
@@ -363,7 +383,35 @@ class Push(SingleArmEnv):
                 return obs_cache["cube_pos"] - obs_cache["goal_pos"] if \
                     "cube_pos" in obs_cache and "goal_pos" in obs_cache else np.zeros(3)
 
+            def obstacle_pos(i):
+                @sensor(modality=modality)
+                def f(obs_cache):
+                    return np.array(self.sim.data.body_xpos[self.obstacle_body_ids[i]])
+
+                f.__name__ = f"obstacle{i}_pos"
+                return f
+
+            def gripper_to_obstacle_pos(i):
+                @sensor(modality=modality)
+                def f(obs_cache):
+                    return obs_cache[f"{pf}eef_pos"] - obs_cache[f"obstacle{i}_pos"] if \
+                        f"{pf}eef_pos" in obs_cache and f"obstacle{i}_pos" in obs_cache else np.zeros(3)
+
+                f.__name__ = f"gripper_to_obstacle{i}_pos"
+                return f
+
+            def cube_to_obstacle_pos(i):
+                @sensor(modality=modality)
+                def f(obs_cache):
+                    return obs_cache["cube_pos"] - obs_cache[f"obstacle{i}_pos"] if \
+                        "cube_pos" in obs_cache and f"obstacle{i}_pos" in obs_cache else np.zeros(3)
+
+                f.__name__ = f"cube_to_obstacle{i}_pos"
+                return f
+
             sensors = [cube_pos, gripper_to_cube_pos, goal_pos, gripper_to_goal_pos, cube_to_goal_pos]
+            sensors += list(map(gripper_to_obstacle_pos, range(self.num_obstacles)))
+            sensors += list(map(cube_to_obstacle_pos, range(self.num_obstacles)))
             names = [s.__name__ for s in sensors]
 
             # Create observables
@@ -400,6 +448,21 @@ class Push(SingleArmEnv):
             self.sim.model.body_pos[self.goal_body_id] = np.array([goal_pos])
             self.sim.model.body_quat[self.goal_body_id] = np.array([goal_quat])
 
+            obstacle_grid = np.mgrid[
+                -self.SPAWN_AREA_SIZE:self.SPAWN_AREA_SIZE:complex(0, int(np.sqrt(self.num_obstacles))),
+                -self.SPAWN_AREA_SIZE:self.SPAWN_AREA_SIZE:complex(0, int(np.sqrt(self.num_obstacles)))
+            ].reshape(2, -1).T
+            for (x, y), obstacle_id in zip(obstacle_grid, self.obstacle_body_ids):
+                self.sim.model.body_pos[obstacle_id] = np.array(
+                    [[self.table_offset[0] + x, self.table_offset[1] + y, self.table_offset[2] + 0.001]]
+                )
+                self.sim.model.body_quat[obstacle_id] = np.array([[1, 0, 0, 0]])
+
+        self.obstacle_pos = np.array([
+            self.sim.data.body_xpos[oid]
+            for oid in self.obstacle_body_ids
+        ])
+
     def check_success(self, goal_pos, cube_pos):
         """
         Check if cube has reached goal.
@@ -410,4 +473,9 @@ class Push(SingleArmEnv):
         return np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS
 
     def compute_reward(self, goal_pos, cube_pos, info):
-        return 0 if self.check_success(goal_pos, cube_pos) else -1
+        if np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS:
+            return 0
+        if self.num_obstacles > 0:
+            if np.any(np.linalg.norm(self.obstacle_pos[:, :2] - cube_pos[:2], axis=-1) <= self.OBSTACLE_RADIUS):
+                return self.OBSTACLE_REWARD
+        return -1
