@@ -100,6 +100,7 @@ class StickPushingEnvironment(gym.Env):
             # next_obs, reward, done, info = self.env.step(np.concatenate([action[:3], [0, 0, 0, 1]]))
         else:
             next_obs, reward, done, info = self.env.step(action)
+        info["TimeLimit.truncated"] = done
         return_obs = self._get_flat_obs(next_obs)
         if self.renderable:
             info["image"] = self.curr_obs["agentview_image"][::-1]
