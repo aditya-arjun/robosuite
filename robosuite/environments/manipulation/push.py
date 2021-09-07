@@ -121,7 +121,7 @@ class Push(SingleArmEnv):
         [0, 0.2],  # z
     ])
     OBSTACLE_REWARD = -2
-    OBSTACLE_GRID_RESOLUTION = 10  # side length of obstacle grid
+    OBSTACLE_GRID_RESOLUTION = 5  # side length of obstacle grid
     OBSTACLE_HALF_SIDELENGTH = SPAWN_AREA_SIZE / OBSTACLE_GRID_RESOLUTION
 
     def __init__(
@@ -137,7 +137,7 @@ class Push(SingleArmEnv):
         use_object_obs=True,
         has_renderer=False,
         has_offscreen_renderer=True,
-        render_camera="frontview",
+        render_camera="agentview",
         render_collision_mesh=False,
         render_visual_mesh=True,
         render_gpu_device_id=-1,
@@ -409,6 +409,7 @@ class Push(SingleArmEnv):
                 return f
 
             sensors = [cube_pos, gripper_to_cube_pos, goal_pos, gripper_to_goal_pos, cube_to_goal_pos]
+            sensors += list(map(obstacle_pos, range(self.num_obstacles)))
             sensors += list(map(gripper_to_obstacle_pos, range(self.num_obstacles)))
             sensors += list(map(cube_to_obstacle_pos, range(self.num_obstacles)))
             names = [s.__name__ for s in sensors]
