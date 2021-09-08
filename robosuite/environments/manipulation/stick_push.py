@@ -11,6 +11,7 @@ from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.placement_samplers import UniformRandomSampler
 from robosuite.utils.observables import Observable, sensor
 from robosuite.utils.mjcf_utils import array_to_string
+from robosuite.utils.transform_utils import convert_quat
 
 
 class StickPush(SingleArmEnv):
@@ -370,9 +371,9 @@ class StickPush(SingleArmEnv):
             def cube_pos(obs_cache):
                 return np.array(self.sim.data.body_xpos[self.cube_body_id])
 
-            # @sensor(modality=modality)
-            # def cube_quat(obs_cache):
-            #     return convert_quat(np.array(self.sim.data.body_xquat[self.cube_body_id]), to="xyzw")
+            @sensor(modality=modality)
+            def stick_quat(obs_cache):
+                return convert_quat(np.array(self.sim.data.body_xquat[self.stick_body_id]), to="xyzw")
 
             @sensor(modality=modality)
             def gripper_to_cube_pos(obs_cache):
@@ -413,10 +414,14 @@ class StickPush(SingleArmEnv):
                 return obs_cache["stick_pos"] - obs_cache["goal_pos"] if \
                     "stick_pos" in obs_cache and "goal_pos" in obs_cache else np.zeros(3)
 
+            @sensor(modality=modality)
+            def stick_grasped(obs_cache):
+                return self._check_grasp(self.robots[0].gripper, self.stick.contact_geoms)
+
             sensors = [
                 gripper_to_cube_pos, gripper_to_goal_pos, cube_to_goal_pos,
                 gripper_to_stick_pos, stick_to_cube_pos, stick_to_goal_pos,
-                cube_pos, goal_pos, stick_pos
+                cube_pos, goal_pos, stick_pos, stick_grasped, stick_quat
             ]
             names = [s.__name__ for s in sensors]
 
