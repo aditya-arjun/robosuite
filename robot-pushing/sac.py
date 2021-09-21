@@ -56,16 +56,23 @@ def get_args():
         default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--resume-path', type=str, default=None)
     parser.add_argument('--watch', default=False, action='store_true')
+
+    # stick-related
+    parser.add_argument("--start-grasping", type=str, default="never")
     return parser.parse_args()
 
 
 def main(args):
     if not args.watch:
         assert args.logdir is not None
-    env_fn = ENV_DICT[args.env]
-    env = env_fn(args.horizon, args.control_freq)
+    env_cls = ENV_DICT[args.env]
+    if args.env == "stick_push":
+        env_fn = lambda r: env_cls(args.horizon, args.control_freq, renderable=r, start_grasping=args.start_grasping)
+    else:
+        env_fn = lambda r: env_cls(args.horizon, args.control_freq, renderable=r)
+    env = env_fn(False)
     train_envs = SubprocVectorEnv(
-        [lambda: env_fn(args.horizon, args.control_freq) for _ in range(args.train_num)])
+        [lambda: env_fn(False) for _ in range(args.train_num)])
     args.state_shape = env.observation_space.shape
     args.action_shape = env.action_space.shape
     args.max_action = np.max(env.action_space.high)
@@ -74,7 +81,7 @@ def main(args):
     print("Action range:", np.min(env.action_space.low),
           np.max(env.action_space.high))
     test_envs = SubprocVectorEnv(
-        [lambda: env_fn(args.horizon, args.control_freq, renderable=args.watch) for _ in range(args.test_num)])
+        [lambda: env_fn(args.watch) for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)

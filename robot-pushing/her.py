@@ -19,7 +19,7 @@ class HERReplayBuffer(VectorReplayBuffer):
                                            self._extend_offset, self.done,
                                            self.last_index, self._lengths)
             episode = self[indices]
-            episode.obs, episode.obs_next, episode.rew, episode.done = self.env.her(
+            episode.obs, episode.obs_next, episode.rew, episode.done, episode.info = self.env.her(
                 episode.obs, episode.obs_next
             )
             for b in episode:

@@ -30,7 +30,7 @@ class PushingEnvironment(gym.Env):
             has_offscreen_renderer=renderable,
             render_visual_mesh=renderable,
             render_collision_mesh=False,
-            camera_names=["frontview"] if renderable else None,
+            camera_names=["agentview"] if renderable else None,
             control_freq=control_freq,
             horizon=horizon,
             use_object_obs=True,
@@ -72,10 +72,10 @@ class PushingEnvironment(gym.Env):
         info["TimeLimit.truncated"] = done
         return_obs = self._get_flat_obs(next_obs)
         if self.renderable:
-            info["image"] = self.curr_obs["frontview_image"][::-1]
+            info["image"] = self.curr_obs["agentview_image"][::-1]
             info["step"] = self.step_num
             if done:
-                info["final_image"] = next_obs["frontview_image"][::-1]
+                info["final_image"] = next_obs["agentview_image"][::-1]
         self.curr_obs = next_obs
         self.step_num += 1
         return return_obs, reward, done, info
@@ -104,17 +104,20 @@ class PushingEnvironment(gym.Env):
         #         break
         dones = np.full_like(rewards, False, dtype=bool)
         dones[-1] = True
-        return obs[:len(rewards)], obs_next[:len(rewards)], np.array(rewards), dones
+        infos = {
+            "TimeLimit.truncated": dones.copy()
+        }
+        return obs[:len(rewards)], obs_next[:len(rewards)], np.array(rewards), dones, infos
 
     def render(self, mode="human"):
         assert self.renderable
-        return self.curr_obs["frontview_image"][::-1]
+        return self.curr_obs["agentview_image"][::-1]
 
 
 if __name__ == "__main__":
     shutil.rmtree("render")
     os.makedirs("render")
-    env = PushingEnvironment(1, 2, 9, renderable=True)
+    env = PushingEnvironment(1, 2, 10, renderable=True)
     env.seed(0)
     # buf = HERReplayBuffer(env, total_size=20, buffer_num=1)
     obs = env.reset()
