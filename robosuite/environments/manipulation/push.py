@@ -121,7 +121,6 @@ class Push(SingleArmEnv):
         [-0.2, 0.2],  # y
         [0, 0.2],  # z
     ])
-    OBSTACLE_REWARD = -2
     OBSTACLE_GRID_RESOLUTION = 5  # side length of obstacle grid
     OBSTACLE_HALF_SIDELENGTH = SPAWN_AREA_SIZE / OBSTACLE_GRID_RESOLUTION
 
@@ -151,8 +150,16 @@ class Push(SingleArmEnv):
         camera_widths=256,
         camera_depths=False,
         num_obstacles=0,
+        standard_reward=-1,
+        goal_reward=0,
+        obstacle_reward=-2,
+        out_of_bounds_reward=-2,
     ):
         self.num_obstacles = num_obstacles
+        self.standard_reward = standard_reward
+        self.goal_reward = goal_reward
+        self.obstacle_reward = obstacle_reward
+        self.out_of_bounds_reward = out_of_bounds_reward
 
         # settings for table top
         self.table_full_size = table_full_size
@@ -516,8 +523,10 @@ class Push(SingleArmEnv):
 
     def compute_reward(self, goal_pos, cube_pos, info):
         if np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS:
-            return 0
+            return self.goal_reward
+        if np.any(np.abs(cube_pos[:2] - self.table_offset[:2]) >= self.SPAWN_AREA_SIZE):
+            return self.out_of_bounds_reward
         if self.num_obstacles > 0:
             if np.any(np.max(np.abs(self.obstacle_pos[:, :2] - cube_pos[:2]), axis=-1) <= self.OBSTACLE_HALF_SIDELENGTH):
-                return self.OBSTACLE_REWARD
-        return -1
+                return self.obstacle_reward
+        return self.standard_reward
