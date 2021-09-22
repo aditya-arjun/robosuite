@@ -1,3 +1,4 @@
+import heapq
 from collections import OrderedDict
 import numpy as np
 
@@ -113,7 +114,7 @@ class Push(SingleArmEnv):
     """
 
     CUBE_HALFSIZE = 0.025  # half of side length of block
-    GOAL_RADIUS = 0.05  # half of side length of goal square
+    GOAL_RADIUS = 0.05  # radius of goal circle
     SPAWN_AREA_SIZE = 0.15  # half of side length of square where block and goal can spawn
     GRIPPER_BOUNDS = np.array([
         [-0.2, 0.2],  # x
@@ -448,21 +449,61 @@ class Push(SingleArmEnv):
             self.sim.model.body_pos[self.goal_body_id] = np.array([goal_pos])
             self.sim.model.body_quat[self.goal_body_id] = np.array([goal_quat])
 
-            start = -self.SPAWN_AREA_SIZE + self.OBSTACLE_HALF_SIDELENGTH
-            stop = self.SPAWN_AREA_SIZE - self.OBSTACLE_HALF_SIDELENGTH
-            step = complex(0, self.OBSTACLE_GRID_RESOLUTION)
-            obstacle_grid = np.mgrid[start:stop:step, start:stop:step].reshape(2, -1).T
-            obstacle_locations = np.random.default_rng().choice(obstacle_grid, self.num_obstacles, replace=False, axis=0)
-            for (x, y), obstacle_id in zip(obstacle_locations, self.obstacle_body_ids):
-                self.sim.model.body_pos[obstacle_id] = np.array(
-                    [[self.table_offset[0] + x, self.table_offset[1] + y, self.table_offset[2] + 0.001]]
-                )
-                self.sim.model.body_quat[obstacle_id] = np.array([[1, 0, 0, 0]])
+            if self.num_obstacles > 0:
+                cube_grid_index = (
+                        (cube_pos[:2] - self.table_offset[:2] + self.SPAWN_AREA_SIZE) // (self.OBSTACLE_HALF_SIDELENGTH * 2)
+                ).astype(int)  # cube pos discretized to integer index on the obstacle grid
+                goal_pos_grid = (goal_pos[:2] - self.table_offset[:2] + self.SPAWN_AREA_SIZE)\
+                    / (self.OBSTACLE_HALF_SIDELENGTH * 2)  # goal pos in grid coordinates but not discretized
+                possible_obstacle_indices = np.mgrid[
+                    :self.OBSTACLE_GRID_RESOLUTION,
+                    :self.OBSTACLE_GRID_RESOLUTION
+                ].reshape(2, -1).T  # shape (grid_res^2, 2)
+                possible_obstacle_indices = possible_obstacle_indices[
+                    (possible_obstacle_indices != cube_grid_index).any(axis=-1)
+                ]
+                rng = np.random.default_rng()
+                while True:
+                    obstacle_indices = rng.choice(possible_obstacle_indices, self.num_obstacles, replace=False, axis=0)
+                    if self._check_path_to_goal(cube_grid_index, goal_pos_grid, obstacle_indices):
+                        break
+
+                obstacle_locations = obstacle_indices * self.OBSTACLE_HALF_SIDELENGTH * 2\
+                    - self.SPAWN_AREA_SIZE + self.table_offset[:2] + self.OBSTACLE_HALF_SIDELENGTH
+                for (x, y), obstacle_id in zip(obstacle_locations, self.obstacle_body_ids):
+                    self.sim.model.body_pos[obstacle_id] = np.array(
+                        [[x, y, self.table_offset[2] + 0.001]]
+                    )
+                    self.sim.model.body_quat[obstacle_id] = np.array([[1, 0, 0, 0]])
 
         self.obstacle_pos = np.array([
             self.sim.data.body_xpos[oid]
             for oid in self.obstacle_body_ids
         ])
+
+    def _check_path_to_goal(self, cube_index, goal_pos, obstacle_indices):
+        obstacle_indices = set(map(tuple, obstacle_indices))
+        queue = [(np.linalg.norm(cube_index - goal_pos), 0, tuple(cube_index))]  # each element is (total_cost, forward_cost, position)
+        visited = set()
+        while queue:
+            _, fcost, pos = heapq.heappop(queue)
+            if pos in visited:
+                continue
+            # check if goal circle intersects the current grid square
+            closest = np.maximum(pos, np.minimum(np.array(pos) + 1, goal_pos))
+            if np.linalg.norm(closest - goal_pos) <= self.GOAL_RADIUS:
+                return True
+            visited.add(pos)
+            for direction in np.array([[0, 1], [1, 0], [-1, 0], [0, -1]]):
+                next_pos = pos + direction
+                if (
+                    np.any(next_pos < 0) or
+                    np.any(next_pos >= self.OBSTACLE_GRID_RESOLUTION) or
+                    tuple(next_pos) in obstacle_indices
+                ):
+                    continue
+                heapq.heappush(queue, (np.linalg.norm(next_pos - goal_pos) + fcost + 1, fcost + 1, tuple(next_pos)))
+        return False
 
     def check_success(self, goal_pos, cube_pos):
         """
