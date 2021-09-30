@@ -466,9 +466,10 @@ class Push(SingleArmEnv):
                     :self.OBSTACLE_GRID_RESOLUTION,
                     :self.OBSTACLE_GRID_RESOLUTION
                 ].reshape(2, -1).T  # shape (grid_res^2, 2)
-                possible_obstacle_indices = possible_obstacle_indices[
-                    (possible_obstacle_indices != cube_grid_index).any(axis=-1)
-                ]
+                possible_obstacle_indices = possible_obstacle_indices[(
+                        (possible_obstacle_indices != cube_grid_index)
+                        & (possible_obstacle_indices != goal_pos_grid.astype(int))
+                ).any(axis=-1)]
                 rng = np.random.default_rng()
                 while True:
                     obstacle_indices = rng.choice(possible_obstacle_indices, self.num_obstacles, replace=False, axis=0)
