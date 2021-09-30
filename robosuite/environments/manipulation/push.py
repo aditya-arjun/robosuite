@@ -116,6 +116,7 @@ class Push(SingleArmEnv):
     CUBE_HALFSIZE = 0.025  # half of side length of block
     GOAL_RADIUS = 0.05  # radius of goal circle
     SPAWN_AREA_SIZE = 0.15  # half of side length of square where block and goal can spawn
+    BLOCK_BOUNDS_SIZE = 0.175  # half of side length of region outside of which the block gets out of bounds reward
     GRIPPER_BOUNDS = np.array([
         [-0.2, 0.2],  # x
         [-0.2, 0.2],  # y
@@ -525,7 +526,7 @@ class Push(SingleArmEnv):
     def compute_reward(self, goal_pos, cube_pos, info):
         if np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS:
             return self.goal_reward
-        if np.any(np.abs(cube_pos[:2] - self.table_offset[:2]) >= self.SPAWN_AREA_SIZE):
+        if np.any(np.abs(cube_pos[:2] - self.table_offset[:2]) >= self.BLOCK_BOUNDS_SIZE):
             return self.out_of_bounds_reward
         if self.num_obstacles > 0:
             if np.any(np.max(np.abs(self.obstacle_pos[:, :2] - cube_pos[:2]), axis=-1) <= self.OBSTACLE_HALF_SIDELENGTH):
