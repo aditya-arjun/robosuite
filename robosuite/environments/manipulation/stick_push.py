@@ -416,7 +416,7 @@ class StickPush(SingleArmEnv):
 
             @sensor(modality=modality)
             def stick_grasped(obs_cache):
-                return self._check_grasp(self.robots[0].gripper, self.stick.contact_geoms)
+                return self._check_grasp()
 
             sensors = [
                 gripper_to_cube_pos, gripper_to_goal_pos, cube_to_goal_pos,
@@ -464,6 +464,47 @@ class StickPush(SingleArmEnv):
             bool: True if cube has reached goal.
         """
         return np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS
+
+    def _check_grasp(self):
+        if not super()._check_grasp(self.robots[0].gripper, self.stick.contact_geoms):
+            return False
+
+        left_finger_pos = self.sim.data.get_geom_xpos(
+            self.robots[0].gripper.important_geoms["left_fingerpad"][0]
+        )
+        right_finger_pos = self.sim.data.get_geom_xpos(
+            self.robots[0].gripper.important_geoms["right_fingerpad"][0]
+        )
+        gripper_plane_normal = np.cross(right_finger_pos - left_finger_pos, [0, 1, 0])
+        # if np.linalg.norm(left_finger_pos - right_finger_pos) < self.STICK_HALFWIDTH * 0.75:
+        #     return False
+
+        stick_pos = np.array(self.sim.data.body_xpos[self.stick_body_id])
+        stick_mat = np.array(self.sim.data.body_xmat[self.stick_body_id]).reshape(3, 3)
+        edges = np.array([
+            [[self.STICK_HALFLENGTH, self.STICK_HALFWIDTH, self.STICK_HALFWIDTH],
+             [-self.STICK_HALFLENGTH, self.STICK_HALFWIDTH, self.STICK_HALFWIDTH]],
+            [[self.STICK_HALFLENGTH, self.STICK_HALFWIDTH, -self.STICK_HALFWIDTH],
+             [-self.STICK_HALFLENGTH, self.STICK_HALFWIDTH, -self.STICK_HALFWIDTH]],
+            [[self.STICK_HALFLENGTH, -self.STICK_HALFWIDTH, self.STICK_HALFWIDTH],
+             [-self.STICK_HALFLENGTH, -self.STICK_HALFWIDTH, self.STICK_HALFWIDTH]],
+            [[self.STICK_HALFLENGTH, -self.STICK_HALFWIDTH, -self.STICK_HALFWIDTH],
+             [-self.STICK_HALFLENGTH, -self.STICK_HALFWIDTH, -self.STICK_HALFWIDTH]],
+        ])
+        edges_world = np.tensordot(stick_mat, edges.T, axes=((1,), (0,))).T + stick_pos  # shape (4, 2, 3)
+
+        denom = (edges_world[:, 1] - edges_world[:, 0]) @ gripper_plane_normal
+        if np.any(denom == 0):
+            return False
+        d = ((left_finger_pos - edges_world[:, 0]) @ gripper_plane_normal) / denom
+        planar_points = edges_world[:, 0] + (edges_world[:, 1] - edges_world[:, 0]) * d[:, None]
+
+        fingers_vector = right_finger_pos - left_finger_pos
+        planar_points_relative = planar_points - left_finger_pos
+        proj = (planar_points_relative @ fingers_vector) / np.linalg.norm(fingers_vector)
+        if (proj < -0.01).any() or (proj > np.linalg.norm(fingers_vector) + 0.01).any():
+            return False
+        return True
 
     def compute_reward(self, goal_pos, cube_pos, info):
         return 0 if self.check_success(goal_pos, cube_pos) else -1
