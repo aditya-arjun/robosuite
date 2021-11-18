@@ -1,5 +1,6 @@
 from collections import OrderedDict
 import numpy as np
+import mujoco_py
 
 from robosuite.utils.mjcf_utils import CustomMaterial
 
@@ -11,7 +12,8 @@ from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.placement_samplers import UniformRandomSampler
 from robosuite.utils.observables import Observable, sensor
 from robosuite.utils.mjcf_utils import array_to_string
-from robosuite.utils.transform_utils import convert_quat
+from robosuite.utils.transform_utils import convert_quat, quat_multiply
+import robosuite.utils.macros as macros
 
 
 class StickPush(SingleArmEnv):
@@ -138,7 +140,7 @@ class StickPush(SingleArmEnv):
         robots,
         env_configuration="default",
         controller_configs=None,
-        gripper_types="default",
+        gripper_types="SuctionGripper",
         initialization_noise=None,
         table_full_size=(0.8, 0.8, 0.05),
         table_friction=(1., 5e-3, 1e-4),
@@ -349,7 +351,13 @@ class StickPush(SingleArmEnv):
         self.cube_body_id = self.sim.model.body_name2id(self.cube.root_body)
         self.goal_body_id = self.sim.model.body_name2id(self.goal.root_body)
         self.stick_body_id = self.sim.model.body_name2id(self.stick.root_body)
-        self.gripper_body_id = self.sim.model.body_name2id(f"{self.robots[0].gripper.naming_prefix}eef")
+        self.gripper_body_id = self.sim.model.body_name2id(f"{self.robots[0].gripper.naming_prefix}suction_gripper")
+        self.weld_constraint_id = None
+        for i, (eq_type, eq_obj1) in enumerate(zip(self.sim.model.eq_type, self.sim.model.eq_obj1id)):
+            if eq_type == mujoco_py.const.EQ_WELD and eq_obj1 == self.gripper_body_id:
+                self.weld_constraint_id = i
+                break
+        assert self.weld_constraint_id is not None
 
     def _setup_observables(self):
         """
@@ -359,6 +367,8 @@ class StickPush(SingleArmEnv):
             OrderedDict: Dictionary mapping observable names to its corresponding Observable object
         """
         observables = super()._setup_observables()
+
+        self.stick_grasped = False
 
         # low-level object information
         if self.use_object_obs:
@@ -416,7 +426,7 @@ class StickPush(SingleArmEnv):
 
             @sensor(modality=modality)
             def stick_grasped(obs_cache):
-                return self._check_grasp()
+                return 1 if self.stick_grasped else -1
 
             sensors = [
                 gripper_to_cube_pos, gripper_to_goal_pos, cube_to_goal_pos,
@@ -440,6 +450,10 @@ class StickPush(SingleArmEnv):
         Resets simulation internal configurations.
         """
         super()._reset_internal()
+
+        self.stick_grasped = False
+        self.sim.model.eq_obj2id[self.weld_constraint_id] = self.stick_body_id
+        self.sim.model.eq_active[self.weld_constraint_id] = 0
 
         # Reset all object positions using initializer sampler if we're not directly loading from an xml
         if not self.deterministic_reset:
@@ -465,50 +479,57 @@ class StickPush(SingleArmEnv):
         """
         return np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS
 
-    def _check_grasp(self):
-        if not super()._check_grasp(self.robots[0].gripper, self.stick.contact_geoms):
-            return False
-
-        left_finger_pos = self.sim.data.get_geom_xpos(
-            self.robots[0].gripper.important_geoms["left_fingerpad"][0]
-        )
-        right_finger_pos = self.sim.data.get_geom_xpos(
-            self.robots[0].gripper.important_geoms["right_fingerpad"][0]
-        )
-        gripper_plane_normal = np.cross(right_finger_pos - left_finger_pos, [0, 1, 0])
-        # if np.linalg.norm(left_finger_pos - right_finger_pos) < self.STICK_HALFWIDTH * 0.75:
-        #     return False
-
-        stick_pos = np.array(self.sim.data.body_xpos[self.stick_body_id])
-        stick_mat = np.array(self.sim.data.body_xmat[self.stick_body_id]).reshape(3, 3)
-        edges = np.array([
-            [[self.STICK_HALFLENGTH, self.STICK_HALFWIDTH, self.STICK_HALFWIDTH],
-             [-self.STICK_HALFLENGTH, self.STICK_HALFWIDTH, self.STICK_HALFWIDTH]],
-            [[self.STICK_HALFLENGTH, self.STICK_HALFWIDTH, -self.STICK_HALFWIDTH],
-             [-self.STICK_HALFLENGTH, self.STICK_HALFWIDTH, -self.STICK_HALFWIDTH]],
-            [[self.STICK_HALFLENGTH, -self.STICK_HALFWIDTH, self.STICK_HALFWIDTH],
-             [-self.STICK_HALFLENGTH, -self.STICK_HALFWIDTH, self.STICK_HALFWIDTH]],
-            [[self.STICK_HALFLENGTH, -self.STICK_HALFWIDTH, -self.STICK_HALFWIDTH],
-             [-self.STICK_HALFLENGTH, -self.STICK_HALFWIDTH, -self.STICK_HALFWIDTH]],
-        ])
-        edges_world = np.tensordot(stick_mat, edges.T, axes=((1,), (0,))).T + stick_pos  # shape (4, 2, 3)
-
-        denom = (edges_world[:, 1] - edges_world[:, 0]) @ gripper_plane_normal
-        if np.any(denom == 0):
-            return False
-        d = ((left_finger_pos - edges_world[:, 0]) @ gripper_plane_normal) / denom
-        planar_points = edges_world[:, 0] + (edges_world[:, 1] - edges_world[:, 0]) * d[:, None]
-
-        fingers_vector = right_finger_pos - left_finger_pos
-        planar_points_relative = planar_points - left_finger_pos
-        proj = (planar_points_relative @ fingers_vector) / np.linalg.norm(fingers_vector)
-        if (proj < -0.01).any() or (proj > np.linalg.norm(fingers_vector) + 0.01).any():
-            return False
-        return True
-
     def compute_reward(self, goal_pos, cube_pos, info):
         return 0 if self.check_success(goal_pos, cube_pos) else -1
 
+    @property
+    def action_dim(self):
+        return super().action_dim + 1
+
+    @property
+    def action_spec(self):
+        low, high = super().action_spec
+        return np.concatenate([low, [-1]]), np.concatenate([high, [1]])
+
     def _pre_action(self, action, policy_step=False):
-        super()._pre_action(action, policy_step)
         self.robots[0].controller.position_limits = self.GRIPPER_BOUNDS.T + self.table_offset
+        # Update robot joints based on controller actions
+        cutoff = 0
+        for idx, robot in enumerate(self.robots):
+            robot_action = action[cutoff:cutoff+robot.action_dim]
+            robot.control(robot_action, policy_step=policy_step)
+            cutoff += robot.action_dim
+        # extra hacked sliding dimension
+        if self.stick_grasped:
+            stick_pos = np.array(self.sim.data.body_xpos[self.stick_body_id])
+            stick_mat = np.array(self.sim.data.body_xmat[self.stick_body_id]).reshape(3, 3)
+            gripper_pos = np.array(self.sim.data.body_xpos[self.gripper_body_id])
+            ends = np.array([
+                [self.STICK_HALFLENGTH, 0, 0],
+                [-self.STICK_HALFLENGTH, 0, 0],
+            ])
+            ends = (stick_mat @ ends.T).T + stick_pos  # shape (2, 3)
+            stick_vector = ends[1] - ends[0]
+            proj = ((gripper_pos - ends[0]) @ stick_vector) / (2 * self.STICK_HALFLENGTH)
+            if (action[-1] > 0 and proj >= 0.01) or (action[-1] < 0 and proj <= 2 * self.STICK_HALFLENGTH - 0.01):
+                stick_vector[[0, 1]] = stick_vector[[1, 0]]  # no idea why, the weld reference frame is flipped
+                self.sim.model.eq_data[self.weld_constraint_id][:3] += 0.01 * self.control_freq * macros.SIMULATION_TIMESTEP * action[-1] * stick_vector / (2 * self.STICK_HALFLENGTH)
+
+    def _post_action(self, action):
+        if (
+            not self.stick_grasped
+            and self.check_contact(self.stick.contact_geoms, self.robots[0].gripper.important_geoms["collision"])
+        ):
+            self.stick_grasped = True
+            self.sim.model.eq_data[self.weld_constraint_id][:3] = \
+                self.sim.data.body_xpos[self.gripper_body_id] - self.sim.data.body_xpos[self.stick_body_id]
+            stick_quat = convert_quat(self.sim.data.body_xquat[self.stick_body_id], to="xyzw")
+            gripper_quat = convert_quat(self.sim.data.body_xquat[self.gripper_body_id], to="xyzw")
+            self.sim.model.eq_data[self.weld_constraint_id][3:] = \
+                convert_quat(quat_multiply(
+                    stick_quat,
+                    gripper_quat,
+                ), to="wxyz")
+            self.sim.model.eq_active[self.weld_constraint_id] = 1
+
+        return super()._post_action(action)
