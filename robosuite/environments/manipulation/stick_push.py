@@ -521,10 +521,23 @@ class StickPush(SingleArmEnv):
                 max_slide = 0.01 * self.control_freq * macros.SIMULATION_TIMESTEP
                 self.sim.model.eq_data[self.weld_constraint_id][:3] += max_slide * action[-1] * stick_vector
 
+    def check_gripper_contact(self):
+        gripper_pos = np.array(self.sim.data.body_xpos[self.gripper_body_id])
+        gripper_mat = np.array(self.sim.data.body_xmat[self.gripper_body_id]).reshape(3, 3)
+        ray_direction = np.array([0, 0, 1], dtype=float)
+        distance, geom_id = self.sim.ray(gripper_pos, gripper_mat @ ray_direction, exclude_body=self.gripper_body_id)
+        if (
+            geom_id is not None
+            and self.sim.model.geom_bodyid[geom_id] == self.stick_body_id
+            and distance < 0.025
+        ):
+            return True
+        return False
+
     def _post_action(self, action):
         if (
             not self.stick_grasped
-            and self.check_contact(self.stick.contact_geoms, self.robots[0].gripper.important_geoms["collision"])
+            and self.check_gripper_contact()
         ):
             self.stick_grasped = True
             stick_mat = np.array(self.sim.data.body_xmat[self.stick_body_id]).reshape(3, 3)
