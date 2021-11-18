@@ -12,7 +12,7 @@ from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.placement_samplers import UniformRandomSampler
 from robosuite.utils.observables import Observable, sensor
 from robosuite.utils.mjcf_utils import array_to_string
-from robosuite.utils.transform_utils import convert_quat, quat_multiply
+from robosuite.utils.transform_utils import convert_quat, mat2quat
 import robosuite.utils.macros as macros
 
 
@@ -492,6 +492,10 @@ class StickPush(SingleArmEnv):
         return np.concatenate([low, [-1]]), np.concatenate([high, [1]])
 
     def _pre_action(self, action, policy_step=False):
+        assert len(action) == self.action_dim, \
+            "environment got invalid action dimension -- expected {}, got {}".format(
+                self.action_dim, len(action))
+
         self.robots[0].controller.position_limits = self.GRIPPER_BOUNDS.T + self.table_offset
         # Update robot joints based on controller actions
         cutoff = 0
@@ -504,6 +508,7 @@ class StickPush(SingleArmEnv):
             stick_pos = np.array(self.sim.data.body_xpos[self.stick_body_id])
             stick_mat = np.array(self.sim.data.body_xmat[self.stick_body_id]).reshape(3, 3)
             gripper_pos = np.array(self.sim.data.body_xpos[self.gripper_body_id])
+            gripper_mat = np.array(self.sim.data.body_xmat[self.gripper_body_id]).reshape(3, 3)
             ends = np.array([
                 [self.STICK_HALFLENGTH, 0, 0],
                 [-self.STICK_HALFLENGTH, 0, 0],
@@ -512,8 +517,9 @@ class StickPush(SingleArmEnv):
             stick_vector = ends[1] - ends[0]
             proj = ((gripper_pos - ends[0]) @ stick_vector) / (2 * self.STICK_HALFLENGTH)
             if (action[-1] > 0 and proj >= 0.01) or (action[-1] < 0 and proj <= 2 * self.STICK_HALFLENGTH - 0.01):
-                stick_vector[[0, 1]] = stick_vector[[1, 0]]  # no idea why, the weld reference frame is flipped
-                self.sim.model.eq_data[self.weld_constraint_id][:3] += 0.01 * self.control_freq * macros.SIMULATION_TIMESTEP * action[-1] * stick_vector / (2 * self.STICK_HALFLENGTH)
+                stick_vector = (gripper_mat @ stick_vector) / (2 * self.STICK_HALFLENGTH)
+                max_slide = 0.01 * self.control_freq * macros.SIMULATION_TIMESTEP
+                self.sim.model.eq_data[self.weld_constraint_id][:3] += max_slide * action[-1] * stick_vector
 
     def _post_action(self, action):
         if (
@@ -521,15 +527,12 @@ class StickPush(SingleArmEnv):
             and self.check_contact(self.stick.contact_geoms, self.robots[0].gripper.important_geoms["collision"])
         ):
             self.stick_grasped = True
-            self.sim.model.eq_data[self.weld_constraint_id][:3] = \
-                self.sim.data.body_xpos[self.gripper_body_id] - self.sim.data.body_xpos[self.stick_body_id]
-            stick_quat = convert_quat(self.sim.data.body_xquat[self.stick_body_id], to="xyzw")
-            gripper_quat = convert_quat(self.sim.data.body_xquat[self.gripper_body_id], to="xyzw")
-            self.sim.model.eq_data[self.weld_constraint_id][3:] = \
-                convert_quat(quat_multiply(
-                    stick_quat,
-                    gripper_quat,
-                ), to="wxyz")
+            stick_mat = np.array(self.sim.data.body_xmat[self.stick_body_id]).reshape(3, 3)
+            gripper_mat = np.array(self.sim.data.body_xmat[self.gripper_body_id]).reshape(3, 3)
+            relative_mat = stick_mat @ gripper_mat
+            self.sim.model.eq_data[self.weld_constraint_id][3:] = convert_quat(mat2quat(relative_mat), to="wxyz")
+            stick_offset = -self.sim.data.body_xpos[self.gripper_body_id] + self.sim.data.body_xpos[self.stick_body_id]
+            self.sim.model.eq_data[self.weld_constraint_id][:3] = gripper_mat @ stick_offset
             self.sim.model.eq_active[self.weld_constraint_id] = 1
 
         return super()._post_action(action)
