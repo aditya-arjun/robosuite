@@ -542,9 +542,9 @@ class StickPush(SingleArmEnv):
             self.stick_grasped = True
             stick_mat = np.array(self.sim.data.body_xmat[self.stick_body_id]).reshape(3, 3)
             gripper_mat = np.array(self.sim.data.body_xmat[self.gripper_body_id]).reshape(3, 3)
-            relative_mat = stick_mat @ gripper_mat
+            relative_mat = gripper_mat.T @ stick_mat
             self.sim.model.eq_data[self.weld_constraint_id][3:] = convert_quat(mat2quat(relative_mat), to="wxyz")
-            stick_offset = -self.sim.data.body_xpos[self.gripper_body_id] + self.sim.data.body_xpos[self.stick_body_id]
+            stick_offset = self.sim.data.body_xpos[self.stick_body_id] - self.sim.data.body_xpos[self.gripper_body_id]
             self.sim.model.eq_data[self.weld_constraint_id][:3] = gripper_mat @ stick_offset
             self.sim.model.eq_active[self.weld_constraint_id] = 1
 
