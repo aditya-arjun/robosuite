@@ -10,12 +10,12 @@ import os
 import tqdm
 import robosuite.utils.macros as macros
 
-macros.SIMULATION_TIMESTEP = 0.02
 np.set_printoptions(suppress=True)
 
 
 class StickPushingEnvironment(gym.Env):
-    def __init__(self, horizon, control_freq, renderable=False, start_grasping="never"):
+    def __init__(self, horizon, control_freq, renderable=False):
+        macros.SIMULATION_TIMESTEP = 0.02
         self.renderable = renderable
         self.env = robosuite.make(
             "StickPush",
@@ -35,34 +35,17 @@ class StickPushingEnvironment(gym.Env):
 
         low, high = self.env.action_spec
         self.action_space = spaces.Box(
-            low=np.concatenate([low[:3], [low[-1]]]),
-            high=np.concatenate([high[:3], [high[-1]]])
+            # low=np.concatenate([low[:3], [low[5], low[-1]]]),
+            # high=np.concatenate([high[:3], [high[5], high[-1]]])
+            low=np.concatenate([low[:3]]),
+            high=np.concatenate([high[:3]])
             # low=low[:3],
             # high=high[:3],
         )
 
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=[21])
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=[27])
         self.curr_obs = None
         self.step_num = None
-
-        self.grasping_state = None
-        if os.path.exists("grasping_state.pickle"):
-            with open("grasping_state.pickle", "rb") as f:
-                self.grasping_state = pickle.load(f)
-        self.default_robot_init = self.env.robots[0].init_qpos
-
-        self.start_grasping = start_grasping
-
-    @property
-    def start_grasping(self):
-        return self._start_grasping
-
-    @start_grasping.setter
-    def start_grasping(self, value):
-        assert value in ["never", "random", "always"]
-        if value != "never":
-            assert self.grasping_state is not None
-        self._start_grasping = value
 
     def seed(self, seed=None):
         if seed is not None:
@@ -78,25 +61,19 @@ class StickPushingEnvironment(gym.Env):
             obs["gripper_to_stick_pos"],
             obs["stick_to_cube_pos"],
             obs["stick_to_goal_pos"],
+            obs["stick_quat"],
         ])
 
     def reset(self):
         self.env.reset()
-        if self.start_grasping == "always" or (self.start_grasping == "random" and np.random.rand() < 0.5):
-            self.env.sim.data.set_joint_qpos(self.env.stick.joints[0], self.grasping_state["stick_qpos"])
-            self.env.robots[0].init_qpos = self.grasping_state["joint_pos"]
-            self.env.robots[0].reset()
-            self.curr_obs = self.env._get_observations(force_update=True)
-        else:
-            self.env.robots[0].init_qpos = self.default_robot_init
-            self.env.robots[0].reset()
-            self.curr_obs = self.env._get_observations(force_update=True)
+        self.curr_obs = self.env._get_observations(force_update=True)
         self.step_num = 0
         return self._get_flat_obs(self.curr_obs)
 
     def step(self, action):
         if np.array_equal(action.shape, self.action_space.shape):
-            next_obs, reward, done, info = self.env.step(np.concatenate([action[:3], [0, 0, 0], [action[-1]]]))
+            # next_obs, reward, done, info = self.env.step(np.concatenate([action[:3], [0, 0, 0], [action[-1]]]))
+            next_obs, reward, done, info = self.env.step(np.concatenate([action[:3], [0, 0, 0]]))
             # next_obs, reward, done, info = self.env.step(np.concatenate([action[:3], [0, 0, 0, 1]]))
         else:
             next_obs, reward, done, info = self.env.step(action)
@@ -141,7 +118,10 @@ class StickPushingEnvironment(gym.Env):
         # dones
         dones = np.full_like(rewards, False, dtype=bool)
         dones[-1] = True
-        return obs[:len(rewards)], obs_next[:len(rewards)], np.array(rewards), dones
+        infos = {
+            "TimeLimit.truncated": dones.copy()
+        }
+        return obs[:len(rewards)], obs_next[:len(rewards)], np.array(rewards), dones, infos
 
     def render(self, mode="human"):
         assert self.renderable
