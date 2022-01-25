@@ -155,7 +155,7 @@ class Push(SingleArmEnv):
         goal_reward=0,
         obstacle_reward=-2,
         out_of_bounds_reward=-2,
-        hard_obstacles=False,
+        hard_obstacles=True,
     ):
         self.num_obstacles = num_obstacles
         self.standard_reward = standard_reward
@@ -353,6 +353,7 @@ class Push(SingleArmEnv):
             self.sim.model.body_name2id(obstacle.root_body)
             for obstacle in self.obstacles
         ]
+        self.table_geom_id = self.sim.model.geom_name2id(self.model.mujoco_arena.table_collision.get('name'))
 
     def _setup_observables(self):
         """
@@ -447,6 +448,13 @@ class Push(SingleArmEnv):
         super()._reset_internal()
 
         self.robots[0].controller.position_limits = self.GRIPPER_BOUNDS.T + self.table_offset
+
+        for geom in self.cube.contact_geoms + [g for obs in self.obstacles for g in obs.contact_geoms]:
+            self.sim.model.geom_contype[self.sim.model.geom_name2id(geom)] = 0b100
+            self.sim.model.geom_conaffinity[self.sim.model.geom_name2id(geom)] = 0b100
+        for i in range(self.sim.model.body_geomnum[self.gripper_body_id]):
+            self.sim.model.geom_contype[i + self.sim.model.body_geomadr[self.gripper_body_id]] = 0b111
+        self.sim.model.geom_contype[self.table_geom_id] = 0b111
 
         # Reset all object positions using initializer sampler if we're not directly loading from an xml
         if not self.deterministic_reset:
