@@ -68,7 +68,10 @@ class PushingEnvironment(gym.Env):
         return self._get_flat_obs(self.curr_obs)
 
     def step(self, action):
-        next_obs, reward, done, info = self.env.step(np.concatenate([action, [0, 0, 0]]))
+        if np.array_equal(action.shape, self.action_space.shape):
+            next_obs, reward, done, info = self.env.step(np.concatenate([action, [0, 0, 0]]))
+        else:
+            next_obs, reward, done, info = self.env.step(action)
         info["TimeLimit.truncated"] = done
         return_obs = self._get_flat_obs(next_obs)
         if self.renderable:

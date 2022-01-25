@@ -155,12 +155,14 @@ class Push(SingleArmEnv):
         goal_reward=0,
         obstacle_reward=-2,
         out_of_bounds_reward=-2,
+        hard_obstacles=False,
     ):
         self.num_obstacles = num_obstacles
         self.standard_reward = standard_reward
         self.goal_reward = goal_reward
         self.obstacle_reward = obstacle_reward
         self.out_of_bounds_reward = out_of_bounds_reward
+        self.hard_obstacles = hard_obstacles
 
         # settings for table top
         self.table_full_size = table_full_size
@@ -282,10 +284,15 @@ class Push(SingleArmEnv):
         self.obstacles = [
             BoxObject(
                 name=f"obstacle{i}",
-                size=[self.OBSTACLE_HALF_SIDELENGTH, self.OBSTACLE_HALF_SIDELENGTH, 0.001],
+                size=[
+                    self.OBSTACLE_HALF_SIDELENGTH,
+                    self.OBSTACLE_HALF_SIDELENGTH,
+                    self.CUBE_HALFSIZE if self.hard_obstacles else 0.001
+                ],
                 rgba=(1, 1, 0, 1),
-                obj_type="visual",
-                joints=None
+                obj_type="all" if self.hard_obstacles else "visual",
+                joints="default" if self.hard_obstacles else None,
+                density=1e8
             )
             for i in range(self.num_obstacles)
         ]
@@ -479,11 +486,14 @@ class Push(SingleArmEnv):
 
                 obstacle_locations = obstacle_indices * self.OBSTACLE_HALF_SIDELENGTH * 2\
                     - self.SPAWN_AREA_SIZE + self.table_offset[:2] + self.OBSTACLE_HALF_SIDELENGTH
-                for (x, y), obstacle_id in zip(obstacle_locations, self.obstacle_body_ids):
-                    self.sim.model.body_pos[obstacle_id] = np.array(
-                        [[x, y, self.table_offset[2] + 0.001]]
-                    )
-                    self.sim.model.body_quat[obstacle_id] = np.array([[1, 0, 0, 0]])
+                for i, ((x, y), obstacle_id) in enumerate(zip(obstacle_locations, self.obstacle_body_ids)):
+                    pos = np.array([x, y, self.table_offset[2] + self.obstacles[0].top_offset[2]])
+                    quat = np.array([1, 0, 0, 0])
+                    if self.hard_obstacles:
+                        self.sim.data.set_joint_qpos(self.obstacles[i].joints[0], np.concatenate([pos, quat]))
+                    else:
+                        self.sim.model.body_pos[obstacle_id] = np.array([pos])
+                        self.sim.model.body_quat[obstacle_id] = np.array([quat])
 
         self.obstacle_pos = np.array([
             self.sim.data.body_xpos[oid]
