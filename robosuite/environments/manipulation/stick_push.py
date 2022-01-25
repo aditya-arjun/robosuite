@@ -352,6 +352,7 @@ class StickPush(SingleArmEnv):
         self.goal_body_id = self.sim.model.body_name2id(self.goal.root_body)
         self.stick_body_id = self.sim.model.body_name2id(self.stick.root_body)
         self.gripper_body_id = self.sim.model.body_name2id(f"{self.robots[0].gripper.naming_prefix}pushing_gripper")
+        self.table_geom_id = self.sim.model.geom_name2id(self.model.mujoco_arena.table_collision.get('name'))
 
     def _setup_observables(self):
         """
@@ -438,6 +439,13 @@ class StickPush(SingleArmEnv):
         Resets simulation internal configurations.
         """
         super()._reset_internal()
+
+        for geom in self.cube.contact_geoms + self.stick.contact_geoms:
+            self.sim.model.geom_contype[self.sim.model.geom_name2id(geom)] = 0b100
+            self.sim.model.geom_conaffinity[self.sim.model.geom_name2id(geom)] = 0b100
+        for i in range(self.sim.model.body_geomnum[self.gripper_body_id]):
+            self.sim.model.geom_contype[i + self.sim.model.body_geomadr[self.gripper_body_id]] = 0b111
+        self.sim.model.geom_contype[self.table_geom_id] = 0b111
 
         # Reset all object positions using initializer sampler if we're not directly loading from an xml
         if not self.deterministic_reset:
