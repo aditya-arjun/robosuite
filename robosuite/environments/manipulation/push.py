@@ -156,6 +156,7 @@ class Push(SingleArmEnv):
         obstacle_reward=-2,
         out_of_bounds_reward=-2,
         hard_obstacles=True,
+        keep_gripper_in_cube_plane=True,
     ):
         self.num_obstacles = num_obstacles
         self.standard_reward = standard_reward
@@ -163,6 +164,7 @@ class Push(SingleArmEnv):
         self.obstacle_reward = obstacle_reward
         self.out_of_bounds_reward = out_of_bounds_reward
         self.hard_obstacles = hard_obstacles
+        self.keep_gripper_in_cube_plane = keep_gripper_in_cube_plane
 
         # settings for table top
         self.table_full_size = table_full_size
@@ -550,3 +552,9 @@ class Push(SingleArmEnv):
             if np.any(np.max(np.abs(self.obstacle_pos[:, :2] - cube_pos[:2]), axis=-1) <= self.OBSTACLE_HALF_SIDELENGTH):
                 return self.obstacle_reward
         return self.standard_reward
+
+    def _pre_action(self, action, policy_step=False):
+        if (self.keep_gripper_in_cube_plane
+                and self.sim.data.body_xpos[self.gripper_body_id][2] - self.table_offset[2] > 0.05):
+            action[2] = -0.1
+        super()._pre_action(action, policy_step)
