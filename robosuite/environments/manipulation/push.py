@@ -155,8 +155,8 @@ class Push(SingleArmEnv):
         goal_reward=0,
         obstacle_reward=-2,
         out_of_bounds_reward=-2,
-        hard_obstacles=True,
-        keep_gripper_in_cube_plane=True,
+        hard_obstacles=False,
+        keep_gripper_in_cube_plane=False,
     ):
         self.num_obstacles = num_obstacles
         self.standard_reward = standard_reward
