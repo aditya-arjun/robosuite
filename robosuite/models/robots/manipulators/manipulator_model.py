@@ -1,9 +1,9 @@
 from collections import OrderedDict
 
+import numpy as np
+
 from robosuite.models.robots import RobotModel
 from robosuite.utils.mjcf_utils import find_elements, string_to_array
-
-import numpy as np
 
 
 class ManipulatorModel(RobotModel):
@@ -25,14 +25,16 @@ class ManipulatorModel(RobotModel):
         # Grab hand's offset from final robot link (string -> np.array -> elements [1, 2, 3, 0] (x, y, z, w))
         # Different case based on whether we're dealing with single or bimanual armed robot
         if self.arm_type == "single":
-            hand_element = find_elements(root=self.root, tags="body",
-                                         attribs={"name": self.eef_name}, return_first=True)
+            hand_element = find_elements(
+                root=self.root, tags="body", attribs={"name": self.eef_name}, return_first=True
+            )
             self.hand_rotation_offset = string_to_array(hand_element.get("quat", "1 0 0 0"))[[1, 2, 3, 0]]
-        else:   # "bimanual" case
+        else:  # "bimanual" case
             self.hand_rotation_offset = {}
             for arm in ("right", "left"):
-                hand_element = find_elements(root=self.root, tags="body",
-                                             attribs={"name": self.eef_name[arm]}, return_first=True)
+                hand_element = find_elements(
+                    root=self.root, tags="body", attribs={"name": self.eef_name[arm]}, return_first=True
+                )
                 self.hand_rotation_offset[arm] = string_to_array(hand_element.get("quat", "1 0 0 0"))[[1, 2, 3, 0]]
 
         # Get camera names for this robot
@@ -76,6 +78,18 @@ class ManipulatorModel(RobotModel):
                 keyword-mapped eef names
         """
         return self.correct_naming(self._eef_name)
+
+    @property
+    def models(self):
+        """
+        Returns a list of all m(sub-)models owned by this robot model. By default, this includes the gripper model,
+        if specified
+
+        Returns:
+            list: models owned by this object
+        """
+        models = super().models
+        return models + list(self.grippers.values())
 
     # -------------------------------------------------------------------------------------- #
     # -------------------------- Private Properties ---------------------------------------- #
