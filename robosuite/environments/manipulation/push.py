@@ -151,13 +151,16 @@ class Push(SingleArmEnv):
         camera_widths=256,
         camera_depths=False,
         num_obstacles=0,
-        standard_reward=-1,
-        goal_reward=0,
+        standard_reward=0,
+        goal_reward=1,
         obstacle_reward=-2,
         out_of_bounds_reward=-2,
         hard_obstacles=False,
         keep_gripper_in_cube_plane=False,
+        reward_shaping=True,
     ):
+        # Note that reward_shaping parameter is not actually used
+
         self.num_obstacles = num_obstacles
         self.standard_reward = standard_reward
         self.goal_reward = goal_reward
@@ -177,6 +180,8 @@ class Push(SingleArmEnv):
         # object placement initializer
         self.cube_initializer = None
         self.goal_initializer = None
+
+        self.reward_scale = 1.0
 
         super().__init__(
             robots=robots,
@@ -212,11 +217,13 @@ class Push(SingleArmEnv):
         Returns:
             float: reward value
         """
-        return self.compute_reward(
+        rew = self.compute_reward(
             np.array(self.sim.data.body_xpos[self.goal_body_id]),
             np.array(self.sim.data.body_xpos[self.cube_body_id]),
             {}
         )
+
+        return rew / max(self.standard_reward, self.goal_reward)
 
     def _load_model(self):
         """
