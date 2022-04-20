@@ -118,9 +118,9 @@ class Push(SingleArmEnv):
     SPAWN_AREA_SIZE = 0.15  # half of side length of square where block and goal can spawn
     BLOCK_BOUNDS_SIZE = 0.175  # half of side length of region outside of which the block gets out of bounds reward
     GRIPPER_BOUNDS = np.array([
-        [-0.2, 0.2],  # x
-        [-0.2, 0.2],  # y
-        [0, 0.2],  # z
+        [-0.4, 0.4],  # x
+        [-0.4, 0.4],  # y
+        [0, 0.8],  # z
     ])
     OBSTACLE_GRID_RESOLUTION = 5  # side length of obstacle grid
     OBSTACLE_HALF_SIDELENGTH = SPAWN_AREA_SIZE / OBSTACLE_GRID_RESOLUTION
@@ -130,7 +130,7 @@ class Push(SingleArmEnv):
         robots,
         env_configuration="default",
         controller_configs=None,
-        gripper_types="PushingGripper",
+        # gripper_types="PushingGripper",
         initialization_noise=None,
         table_full_size=(0.8, 0.8, 0.05),
         table_friction=(1., 5e-3, 1e-4),
@@ -157,10 +157,8 @@ class Push(SingleArmEnv):
         out_of_bounds_reward=-2,
         hard_obstacles=False,
         keep_gripper_in_cube_plane=False,
-        reward_shaping=True,
+        reward_shaping=False,
     ):
-        # Note that reward_shaping parameter is not actually used
-
         self.num_obstacles = num_obstacles
         self.standard_reward = standard_reward
         self.goal_reward = goal_reward
@@ -182,13 +180,16 @@ class Push(SingleArmEnv):
         self.goal_initializer = None
 
         self.reward_scale = 1.0
+        self.reward_shaping = reward_shaping
+
+        self.has_touched = False
 
         super().__init__(
             robots=robots,
             env_configuration=env_configuration,
             controller_configs=controller_configs,
             mount_types="default",
-            gripper_types=gripper_types,
+            # gripper_types=gripper_types,
             initialization_noise=initialization_noise,
             use_camera_obs=use_camera_obs,
             has_renderer=has_renderer,
@@ -217,13 +218,40 @@ class Push(SingleArmEnv):
         Returns:
             float: reward value
         """
-        rew = self.compute_reward(
-            np.array(self.sim.data.body_xpos[self.goal_body_id]),
-            np.array(self.sim.data.body_xpos[self.cube_body_id]),
-            {}
-        )
 
-        return rew / max(self.standard_reward, self.goal_reward)
+        goal_pos = np.array(self.sim.data.body_xpos[self.goal_body_id])
+        cube_pos = np.array(self.sim.data.body_xpos[self.cube_body_id])
+
+        if self.reward_shaping:
+            reward = 0.0
+
+            if self.check_success(goal_pos, cube_pos):
+                reward = 2.25
+            else:
+                gripper_site_pos = self.sim.data.site_xpos[self.robots[0].eef_site_id]
+                dist = np.linalg.norm(gripper_site_pos - cube_pos)
+                reaching_reward = 1 - np.tanh(10.0 * dist)
+                reward += reaching_reward
+
+                if self._check_gripper_contact(gripper=self.robots[0].gripper, object_geoms=self.cube) or (self.has_touched and dist < 0.08):
+                    self.has_touched = True
+                    reward += 0.25
+
+                    goal_dist = np.linalg.norm(goal_pos - cube_pos)
+                    reaching_goal = 1 - np.tanh(10.0 * goal_dist)
+                    reward += reaching_goal
+                elif dist >= 0.08:
+                    self.has_touched = False
+
+            return reward / 2.25
+        else:
+            rew = self.compute_reward(
+                goal_pos,
+                cube_pos,
+                {}
+            )
+
+            return rew
 
     def _load_model(self):
         """
@@ -258,15 +286,15 @@ class Push(SingleArmEnv):
         # ])
 
         # middle of table (offset) ([-0.1, 0])
-        self.robots[0].init_qpos = np.array([
-            0,
-            0.96629869,
-            0,
-            -2.23725147,
-            0,
-            3.26003255,
-            0.78539816
-        ])
+        # self.robots[0].init_qpos = np.array([
+        #     0,
+        #     0.96629869,
+        #     0,
+        #     -2.23725147,
+        #     0,
+        #     3.26003255,
+        #     0.78539816
+        # ])
 
         # load model for table top workspace
         mujoco_arena = TableArena(
@@ -357,7 +385,7 @@ class Push(SingleArmEnv):
         # Additional object references from this env
         self.cube_body_id = self.sim.model.body_name2id(self.cube.root_body)
         self.goal_body_id = self.sim.model.body_name2id(self.goal.root_body)
-        self.gripper_body_id = self.sim.model.body_name2id(f"{self.robots[0].gripper.naming_prefix}pushing_gripper")
+        # self.gripper_body_id = self.sim.model.body_name2id(f"{self.robots[0].gripper.naming_prefix}panda_gripper")
         self.obstacle_body_ids = [
             self.sim.model.body_name2id(obstacle.root_body)
             for obstacle in self.obstacles
@@ -456,19 +484,20 @@ class Push(SingleArmEnv):
         """
         super()._reset_internal()
 
-        self.robots[0].controller.position_limits = self.GRIPPER_BOUNDS.T + self.table_offset
+        # self.robots[0].controller.position_limits = self.GRIPPER_BOUNDS.T + self.table_offset
 
-        for geom in self.cube.contact_geoms + [g for obs in self.obstacles for g in obs.contact_geoms]:
-            self.sim.model.geom_contype[self.sim.model.geom_name2id(geom)] = 0b100
-            self.sim.model.geom_conaffinity[self.sim.model.geom_name2id(geom)] = 0b100
-        for i in range(self.sim.model.body_geomnum[self.gripper_body_id]):
-            self.sim.model.geom_contype[i + self.sim.model.body_geomadr[self.gripper_body_id]] = 0b111
-        self.sim.model.geom_contype[self.table_geom_id] = 0b111
+        # for geom in self.cube.contact_geoms + [g for obs in self.obstacles for g in obs.contact_geoms]:
+        #     self.sim.model.geom_contype[self.sim.model.geom_name2id(geom)] = 0b100
+        #     self.sim.model.geom_conaffinity[self.sim.model.geom_name2id(geom)] = 0b100
+        # for i in range(self.sim.model.body_geomnum[self.gripper_body_id]):
+        #     self.sim.model.geom_contype[i + self.sim.model.body_geomadr[self.gripper_body_id]] = 0b111
+        # self.sim.model.geom_contype[self.table_geom_id] = 0b111
+
 
         # Reset all object positions using initializer sampler if we're not directly loading from an xml
         if not self.deterministic_reset:
             # Sample from the placement initializer for all objects
-            gripper_pos = self.sim.data.body_xpos[self.gripper_body_id]
+            gripper_pos = self.sim.data.body_xpos[self.robots[0].eef_site_id]
             cube_pos = gripper_pos
             while np.max(np.abs(cube_pos[:2] - gripper_pos[:2])) <= self.CUBE_HALFSIZE + 0.013:
                 cube_placement = self.cube_initializer.sample()
@@ -550,6 +579,12 @@ class Push(SingleArmEnv):
         """
         return np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS
 
+    def _check_success(self):
+        goal_pos = np.array(self.sim.data.body_xpos[self.goal_body_id])
+        cube_pos = np.array(self.sim.data.body_xpos[self.cube_body_id])
+
+        return self.check_success(goal_pos, cube_pos)
+
     def compute_reward(self, goal_pos, cube_pos, info):
         if np.linalg.norm(goal_pos[:2] - cube_pos[:2]) <= self.GOAL_RADIUS:
             return self.goal_reward
@@ -561,7 +596,7 @@ class Push(SingleArmEnv):
         return self.standard_reward
 
     def _pre_action(self, action, policy_step=False):
-        if (self.keep_gripper_in_cube_plane
-                and self.sim.data.body_xpos[self.gripper_body_id][2] - self.table_offset[2] > 0.05):
-            action[2] = -0.1
+        # if (self.keep_gripper_in_cube_plane
+        #         and self.sim.data.body_xpos[self.gripper_body_id][2] - self.table_offset[2] > 0.05):
+        #     action[2] = -0.1
         super()._pre_action(action, policy_step)

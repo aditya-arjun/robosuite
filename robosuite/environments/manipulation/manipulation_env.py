@@ -239,6 +239,29 @@ class ManipulationEnv(RobotEnv):
                 return False
         return True
 
+    def _check_gripper_contact(self, gripper, object_geoms):
+        # Convert object, gripper geoms into standardized form
+        if isinstance(object_geoms, MujocoModel):
+            o_geoms = object_geoms.contact_geoms
+        else:
+            o_geoms = [object_geoms] if type(object_geoms) is str else object_geoms
+        if isinstance(gripper, GripperModel):
+            g_geoms = [gripper.important_geoms["left_finger"], gripper.important_geoms["right_finger"]]
+        elif type(gripper) is str:
+            g_geoms = [[gripper]]
+        else:
+            # Parse each element in the gripper_geoms list accordingly
+            g_geoms = [[g_group] if type(g_group) is str else g_group for g_group in gripper]
+
+        # Search for any collisions between each gripper geom group and the object geoms group
+        for g_group in g_geoms:
+            if self.check_contact(g_group, o_geoms):
+                return True
+        return False
+
+
+
+
     def _gripper_to_target(self, gripper, target, target_type="body", return_distance=False):
         """
         Calculates the (x,y,z) Cartesian distance (target_pos - gripper_pos) from the specified @gripper to the

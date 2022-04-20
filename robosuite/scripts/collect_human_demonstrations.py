@@ -61,8 +61,10 @@ def collect_human_trajectory(env, device, arm, env_configuration):
             break
 
         # Run environment step
-        _, rew, _, _ = env.step(action)
+        obs, rew, _, _ = env.step(action)
         # print("Reward: ", rew)
+        # print("Obs: ", obs)
+
         env.render()
 
         # Also break if we complete the task
