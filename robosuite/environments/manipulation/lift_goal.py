@@ -461,10 +461,6 @@ class LiftGoal(SingleArmEnv):
             self.sim.model.body_pos[self.goal_body_id] = np.array([goal_pos])
             self.sim.model.body_quat[self.goal_body_id] = np.array([goal_quat])
 
-            print('--------------------')
-            print(goal_pos)
-            print('-------------------')
-
     def visualize(self, vis_settings):
         """
         In addition to super call, visualize gripper site proportional to the distance to the cube.
