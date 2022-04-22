@@ -235,7 +235,9 @@ class Push(SingleArmEnv):
 
                 if self._check_gripper_contact(gripper=self.robots[0].gripper, object_geoms=self.cube) or (self.has_touched and dist < 0.08):
                     self.has_touched = True
-                    reward += 0.25
+
+                    if not self._check_grasp(gripper=self.robots[0].gripper, object_geoms=self.cube):
+                        reward += 0.25
 
                     goal_dist = np.linalg.norm(goal_pos - cube_pos)
                     reaching_goal = 1 - np.tanh(10.0 * goal_dist)

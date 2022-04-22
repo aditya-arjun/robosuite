@@ -341,3 +341,17 @@ class ManipulationEnv(RobotEnv):
             assert issubclass(
                 ROBOT_CLASS_MAPPING[robot], Manipulator
             ), "Only manipulator robots supported for manipulation environment!"
+
+    def _save_configuration(self):
+        task_instance_xml = self.sim.model.get_exml()
+        task_instance_state = np.array(self.sim.get_state.flatten())
+
+        return task_instance_xml, task_instance_state
+
+    def _load_configuration(self, config):
+        task_instance_xml, task_instance_state = config
+        self.reset_from_xml_string(task_instance_xml)
+        self.sim.reset()
+        self.sim.set_state_from_flattened(task_instance_state)
+        self.sim.forward()
+
