@@ -62,6 +62,7 @@ def collect_human_trajectory(env, device, arm, env_configuration):
 
         # Run environment step
         obs, rew, _, _ = env.step(action)
+
         # print("Reward: ", rew)
         # print("Obs: ", obs)
 

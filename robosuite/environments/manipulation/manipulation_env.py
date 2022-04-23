@@ -343,8 +343,8 @@ class ManipulationEnv(RobotEnv):
             ), "Only manipulator robots supported for manipulation environment!"
 
     def _save_configuration(self):
-        task_instance_xml = self.sim.model.get_exml()
-        task_instance_state = np.array(self.sim.get_state.flatten())
+        task_instance_xml = self.sim.model.get_xml()
+        task_instance_state = np.array(self.sim.get_state().flatten())
 
         return task_instance_xml, task_instance_state
 
