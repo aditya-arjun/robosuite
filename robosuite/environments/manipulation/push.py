@@ -414,9 +414,9 @@ class Push(SingleArmEnv):
             def cube_pos(obs_cache):
                 return np.array(self.sim.data.body_xpos[self.cube_body_id])
 
-            # @sensor(modality=modality)
-            # def cube_quat(obs_cache):
-            #     return convert_quat(np.array(self.sim.data.body_xquat[self.cube_body_id]), to="xyzw")
+            @sensor(modality=modality)
+            def cube_quat(obs_cache):
+                return convert_quat(np.array(self.sim.data.body_xquat[self.cube_body_id]), to="xyzw")
 
             @sensor(modality=modality)
             def gripper_to_cube_pos(obs_cache):
