@@ -464,7 +464,7 @@ class Push(SingleArmEnv):
                 f.__name__ = f"cube_to_obstacle{i}_pos"
                 return f
 
-            sensors = [cube_pos, gripper_to_cube_pos, goal_pos, gripper_to_goal_pos, cube_to_goal_pos]
+            sensors = [cube_pos, cube_quat, gripper_to_cube_pos, goal_pos, gripper_to_goal_pos, cube_to_goal_pos]
             sensors += list(map(obstacle_pos, range(self.num_obstacles)))
             sensors += list(map(gripper_to_obstacle_pos, range(self.num_obstacles)))
             sensors += list(map(cube_to_obstacle_pos, range(self.num_obstacles)))
