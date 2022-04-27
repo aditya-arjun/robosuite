@@ -165,8 +165,6 @@ class LiftGoal(SingleArmEnv):
         camera_segmentations=None,  # {None, instance, class, element}
         renderer="mujoco",
         renderer_config=None,
-        control_predictor=None,
-        incentivize_push=False,
         on_ground_proportion=0.0
     ):
         # settings for table top
@@ -187,8 +185,6 @@ class LiftGoal(SingleArmEnv):
 
         self.GOAL_RADIUS = 0.02
 
-        self.incentivize_push = incentivize_push
-        self.control_predictor = control_predictor
         self.on_ground_proportion = on_ground_proportion
 
         self.push_certainty = 0.003
@@ -265,45 +261,13 @@ class LiftGoal(SingleArmEnv):
             reaching_reward = 1 - np.tanh(10.0 * dist)
             reward += reaching_reward
 
-            if self.control_predictor == None:
-                # grasping reward
-                if self._check_grasp(gripper=self.robots[0].gripper, object_geoms=self.cube):
-                    reward += 0.25
+            # grasping reward
+            if self._check_grasp(gripper=self.robots[0].gripper, object_geoms=self.cube):
+                reward += 0.25
 
-                    goal_dist = np.linalg.norm(goal_pos - cube_pos)
-                    reaching_goal = 1 - np.tanh(10.0 * goal_dist)
-                    reward += reaching_goal
-            else:
-                if self._check_gripper_contact(gripper=self.robots[0].gripper, object_geoms=self.cube):
-                    observations = self.viewer.get_observations() if self.viewer_get_obs else self._get_observations()
-
-                    control_input = torch.FloatTensor(np.concatenate([np.array(x) for x in [observations['robot0_proprio-state'], observations['cube_pos'], observations['cube_quat']]]))
-
-                    score = self.control_predictor(control_input).detach().numpy()[0]
-                    normalized_score = (score - self.push_certainty) / (self.lift_certainty - self.push_certainty)
-
-                    if self.incentivize_push:
-                        if score < self.push_certainty:
-                            reward += 0.5
-                            goal_dist = np.linalg.norm(goal_pos - cube_pos)
-                            reaching_goal = 1 - np.tanh(10.0 * goal_dist)
-                            reward += reaching_goal
-                        elif score > self.lift_certainty:
-                            reward -= 0.5
-                        else:
-                            sigmoid_score = 1.0 / (1.0 + np.exp(-normalized_score))
-                            reward += (0.5 - sigmoid_score)
-                    else:
-                        if score < self.push_certainty:
-                            reward -= 0.5
-                        elif score > self.lift_certainty:
-                            reward += 0.5
-                            goal_dist = np.linalg.norm(goal_pos - cube_pos)
-                            reaching_goal = 1 - np.tanh(10.0 * goal_dist)
-                            reward += reaching_goal
-                        else:
-                            sigmoid_score = 1.0 / (1.0 + np.exp(-normalized_score))
-                            reward += sigmoid_score - 0.5
+                goal_dist = np.linalg.norm(goal_pos - cube_pos)
+                reaching_goal = 1 - np.tanh(10.0 * goal_dist)
+                reward += reaching_goal
 
         # Scale reward if requested
         if self.reward_scale is not None:
