@@ -1,6 +1,7 @@
 from collections import OrderedDict
 
 import numpy as np
+import torch
 
 from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
 from robosuite.models.arenas import TableArena
@@ -164,6 +165,9 @@ class LiftGoal(SingleArmEnv):
         camera_segmentations=None,  # {None, instance, class, element}
         renderer="mujoco",
         renderer_config=None,
+        control_predictor=None,
+        incentivize_push=False,
+        on_ground_proportion=0.0
     ):
         # settings for table top
         self.table_full_size = table_full_size
@@ -182,6 +186,13 @@ class LiftGoal(SingleArmEnv):
         self.goal_initializer = None
 
         self.GOAL_RADIUS = 0.02
+
+        self.incentivize_push = incentivize_push
+        self.control_predictor = control_predictor
+        self.on_ground_proportion = on_ground_proportion
+
+        self.push_certainty = 0.003
+        self.lift_certainty = 0.0065
 
         super().__init__(
             robots=robots,
@@ -254,13 +265,45 @@ class LiftGoal(SingleArmEnv):
             reaching_reward = 1 - np.tanh(10.0 * dist)
             reward += reaching_reward
 
-            # grasping reward
-            if self._check_grasp(gripper=self.robots[0].gripper, object_geoms=self.cube):
-                reward += 0.25
+            if self.control_predictor == None:
+                # grasping reward
+                if self._check_grasp(gripper=self.robots[0].gripper, object_geoms=self.cube):
+                    reward += 0.25
 
-                goal_dist = np.linalg.norm(goal_pos - cube_pos)
-                reaching_goal = 1 - np.tanh(10.0 * goal_dist)
-                reward += reaching_goal
+                    goal_dist = np.linalg.norm(goal_pos - cube_pos)
+                    reaching_goal = 1 - np.tanh(10.0 * goal_dist)
+                    reward += reaching_goal
+            else:
+                if self._check_gripper_contact(gripper=self.robots[0].gripper, object_geoms=self.cube):
+                    observations = self.viewer.get_observations() if self.viewer_get_obs else self._get_observations()
+
+                    control_input = torch.FloatTensor(np.concatenate([np.array(x) for x in [observations['robot0_proprio-state'], observations['cube_pos'], observations['cube_quat']]]))
+
+                    score = self.control_predictor(control_input).detach().numpy()[0]
+                    normalized_score = (score - self.push_certainty) / (self.lift_certainty - self.push_certainty)
+
+                    if self.incentivize_push:
+                        if score < self.push_certainty:
+                            reward += 0.5
+                            goal_dist = np.linalg.norm(goal_pos - cube_pos)
+                            reaching_goal = 1 - np.tanh(10.0 * goal_dist)
+                            reward += reaching_goal
+                        elif score > self.lift_certainty:
+                            reward -= 0.5
+                        else:
+                            sigmoid_score = 1.0 / (1.0 + np.exp(-normalized_score))
+                            reward += (0.5 - sigmoid_score)
+                    else:
+                        if score < self.push_certainty:
+                            reward -= 0.5
+                        elif score > self.lift_certainty:
+                            reward += 0.5
+                            goal_dist = np.linalg.norm(goal_pos - cube_pos)
+                            reaching_goal = 1 - np.tanh(10.0 * goal_dist)
+                            reward += reaching_goal
+                        else:
+                            sigmoid_score = 1.0 / (1.0 + np.exp(-normalized_score))
+                            reward += sigmoid_score - 0.5
 
         # Scale reward if requested
         if self.reward_scale is not None:
@@ -334,7 +377,7 @@ class LiftGoal(SingleArmEnv):
                 ensure_object_boundary_in_range=False,
                 ensure_valid_placement=True,
                 reference_pos=self.table_offset,
-                z_offset=0.04,
+                z_offset=0.001,
             )
 
         if self.goal_initializer is not None:
@@ -351,7 +394,7 @@ class LiftGoal(SingleArmEnv):
                 ensure_object_boundary_in_range=False,
                 ensure_valid_placement=True,
                 reference_pos=self.table_offset,
-                z_offset=0.1,
+                z_offset=0.001,
             )
 
         # task includes arena, robot, and objects of interest
@@ -452,7 +495,10 @@ class LiftGoal(SingleArmEnv):
 
 
             # Hack to also sample random z's
-            self.goal_initializer.z_offset = np.random.uniform(0.1, 0.2)
+            if np.random.uniform(0.0, 1.0) > self.on_ground_proportion:
+                self.goal_initializer.z_offset = np.random.uniform(0.1, 0.2)
+            else:
+                self.goal_initializer.z_offset = 0.001
             goal_placement = self.goal_initializer.sample(fixtures=object_placements)
             goal_pos, goal_quat, _ = goal_placement["goal"]
 
